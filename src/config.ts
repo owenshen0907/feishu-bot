@@ -1,10 +1,32 @@
-import "dotenv/config";
+import fs from "node:fs";
 import path from "node:path";
+import dotenv from "dotenv";
 import { z } from "zod";
 import type { Scope } from "./types.js";
 
+function loadEnvProfile(env: NodeJS.ProcessEnv = process.env): string {
+  const profile = (env.BOT_PROFILE || env.NODE_ENV || "development").trim();
+  const candidates = [".env", `.env.${profile}`];
+
+  for (const name of candidates) {
+    const fullPath = path.resolve(process.cwd(), name);
+    if (!fs.existsSync(fullPath)) {
+      continue;
+    }
+    dotenv.config({
+      path: fullPath,
+      override: name !== ".env"
+    });
+  }
+
+  return profile;
+}
+
+const loadedProfile = loadEnvProfile();
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  BOT_PROFILE: z.string().default(loadedProfile),
   FEISHU_APP_ID: z.string().min(1),
   FEISHU_APP_SECRET: z.string().min(1),
   FEISHU_BOT_NAME: z.string().default("smartkit-bot"),
@@ -26,6 +48,7 @@ const schema = z.object({
 
 export interface AppConfig {
   nodeEnv: "development" | "test" | "production";
+  profile: string;
   feishu: {
     appId: string;
     appSecret: string;
@@ -59,6 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const raw = schema.parse(env);
   return {
     nodeEnv: raw.NODE_ENV,
+    profile: raw.BOT_PROFILE,
     feishu: {
       appId: raw.FEISHU_APP_ID,
       appSecret: raw.FEISHU_APP_SECRET,

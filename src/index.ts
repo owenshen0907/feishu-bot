@@ -43,6 +43,7 @@ async function main(): Promise<void> {
     bind: config.health.bind,
     port: config.health.port,
     getPayload: () => ({
+      profile: config.profile,
       dbPath: config.session.dbPath,
       reconnect: connection.getReconnectInfo()
     })

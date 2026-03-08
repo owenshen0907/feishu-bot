@@ -1,10 +1,15 @@
 node_modules
 dist
 .env
+.env.*
+!.env.example
+!.env.test.example
+!.env.production.example
 data/*.db
 data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
 coverage
 .vscode
+.codex
 .DS_Store

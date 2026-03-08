@@ -70,6 +70,32 @@ pnpm install
 - `SMARTKIT_BASE_URL`
 - `SMARTKIT_TOKEN`（如果 SmartKit Bridge 开启了鉴权）
 
+## 环境分层
+
+现在支持按环境覆盖配置：
+
+- 基础配置：`.env`
+- 测试覆盖：`.env.test`
+- 生产覆盖：`.env.production`
+- 也支持自定义：`.env.<BOT_PROFILE>`
+
+例如你可以这样跑测试环境：
+
+```bash
+BOT_PROFILE=test pnpm dev
+```
+
+生产环境：
+
+```bash
+BOT_PROFILE=production pnpm start
+```
+
+仓库里已经带了两个示例文件：
+
+- `.env.test.example`
+- `.env.production.example`
+
 ## 启动
 
 开发模式：
