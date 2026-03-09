@@ -31,7 +31,7 @@ interface MessageContext {
 export class BotService {
   constructor(
     private readonly store: SessionStore,
-    private readonly smartkit: SmartKitGateway,
+    private readonly smartkit: SmartKitGateway | undefined,
     private readonly chatService: BotChatService,
     private readonly messenger: BotMessenger,
     private readonly formatter: BotFormatter,
@@ -132,6 +132,9 @@ export class BotService {
   }> {
     switch (parsed.action) {
       case "trace": {
+        if (!this.smartkit) {
+          return { reply: this.formatter.formatSmartKitUnavailable() };
+        }
         const envelope = await this.smartkit.analyzeTrace({
           traceId: parsed.targetId,
           mode: parsed.mode,
@@ -141,6 +144,9 @@ export class BotService {
         return this.handleBridgeResponse(envelope, parsed.rawText, context.userId, context.scope);
       }
       case "uid": {
+        if (!this.smartkit) {
+          return { reply: this.formatter.formatSmartKitUnavailable() };
+        }
         const envelope = await this.smartkit.analyzeUid({
           uid: parsed.targetId,
           mode: parsed.mode,
@@ -151,6 +157,9 @@ export class BotService {
         return this.handleBridgeResponse(envelope, parsed.rawText, context.userId, context.scope);
       }
       case "job": {
+        if (!this.smartkit) {
+          return { reply: this.formatter.formatSmartKitUnavailable() };
+        }
         const jobId = parsed.targetId || session?.jobId;
         if (!jobId) {
           return { reply: this.formatter.formatHelp() };
@@ -168,6 +177,9 @@ export class BotService {
         };
       }
       case "followup": {
+        if (!this.smartkit) {
+          return { reply: this.formatter.formatSmartKitUnavailable() };
+        }
         if (!session?.conversationId) {
           return { reply: this.formatter.formatHelp() };
         }

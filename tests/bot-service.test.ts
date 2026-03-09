@@ -182,6 +182,18 @@ describe("BotService", () => {
     store.close();
   });
 
+  it("degrades trace commands when smartkit is not configured", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const service = new BotService(store, undefined, new FakeChatService(), messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/trace trace-123"));
+
+    expect(renderCardText(messenger, 0)).toContain("SmartKit 诊断尚未接入");
+    expect(renderCardText(messenger, 0)).toContain("普通机器人");
+    store.close();
+  });
+
   it("supports clearing per-user chat memory", async () => {
     const store = new SessionStore(":memory:");
     const messenger = new InMemoryMessenger();

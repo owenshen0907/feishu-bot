@@ -120,6 +120,14 @@ pnpm build
 pnpm start
 ```
 
+### 桌面版常用命令（2026-03-09 实测）
+
+- `pnpm dev`：在本地启动长连接与健康检查服务，内部是 `tsx watch src/index.ts`。若 `.env` 里缺少飞书或模型凭据，会在日志里提示 “credentials are missing”，但健康检查端口会照常监听在 `127.0.0.1:3179`。
+- `pnpm dev:mac`：启动新的原生 macOS 控制台。它会先执行 `pnpm build` 生成 Node bridge 和后端，再用 `swift run --package-path macos/FeishuBotApp` 拉起固定尺寸的 SwiftUI 桌面壳。
+- `pnpm test:mac`：运行原生 macOS 控制台的 Swift 单元测试。
+- `pnpm package:mac`：生成原生 `.app` 和 `.dmg`，输出目录为 `dist/native-macos`。
+- `pnpm dev:mac:electron`：旧 Electron 壳保留为迁移期备用入口；只有在需要回查老界面或兼容链路时才使用。
+
 启动后会做三件事：
 
 - 建立飞书长连接
@@ -128,23 +136,21 @@ pnpm start
 
 ## 打包成 macOS App
 
-- 本地调试桌面版（Electron 壳）：
+- 本地调试原生桌面版：
 
 ```bash
-pnpm dev
-# 另开终端
 pnpm dev:mac
 ```
 
-第一条命令启动长连接/健康检查服务，第二条命令启动 Electron 外壳。
+这会先构建 `dist/desktop-bridge-cli.js` 与 Node 后端，再启动固定尺寸 `1440x900` 的 SwiftUI 控制台。
 
-- 直接运行桌面壳使用现有构建：
+- 运行 release 模式原生桌面壳：
 
 ```bash
 pnpm start:mac
 ```
 
-确保 `.env` 已配置并且 `pnpm build` 生成了 `dist/index.js`。
+命令会使用 release 构建的 Swift 可执行文件，并通过 Node bridge 读写 `.env` / `console-settings.json`。
 
 - 打包 DMG：
 
@@ -152,7 +158,20 @@ pnpm start:mac
 pnpm package:mac
 ```
 
-生成的安装包在 `dist/mac`，默认产品名为 “Feishu Bot”。Electron 壳会在启动时内嵌启动 Node 后端，并轮询健康检查端口后再展示状态页。Help 菜单可以快速打开 `.env` 和数据目录。
+生成的安装包在 `dist/native-macos`，包括：
+
+- `Feishu Bot.app`
+- `Feishu Bot.dmg`
+
+原生 App 会把 Swift 可执行文件、bundled Node runtime、`dist/`、`node_modules/`、bridge 脚本与 `runtime-config.mjs` 一起打进 bundle。配置仍写入用户本地 `Application Support/Feishu Bot`，不会写回安装目录。
+
+- 迁移期保留旧 Electron 壳：
+
+```bash
+pnpm dev:mac:electron
+pnpm start:mac:electron
+pnpm package:mac:electron
+```
 
 ## 飞书权限建议
 

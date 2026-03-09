@@ -253,6 +253,29 @@ export class BotFormatter {
     };
   }
 
+  formatSmartKitUnavailable(): BotReplyMessage {
+    const card = buildCard({
+      title: "SmartKit 诊断尚未接入",
+      template: "orange",
+      elements: [
+        markdownBlock([
+          "当前还没有配置 SmartKit Bridge，所以 `/trace`、`/uid`、`/job` 这类诊断命令暂时不可用。",
+          "桌面应用和机器人本身可以继续正常使用。"
+        ].join("\n\n")),
+        noteBlock([
+          "如果你只想把它当普通机器人使用，可以直接发 `/chat 你的问题`，或在私聊里直接说话。",
+          "以后补上 `SMARTKIT_BASE_URL` 和 `SMARTKIT_TOKEN` 后，再重启应用即可打开诊断能力。"
+        ])
+      ]
+    });
+
+    return {
+      kind: "card",
+      card,
+      textPreview: "SmartKit 诊断尚未接入"
+    };
+  }
+
   formatMemoryCleared(deletedCount: number): BotReplyMessage {
     const card = buildCard({
       title: "聊天记忆已清空",

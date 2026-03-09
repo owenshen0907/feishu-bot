@@ -1,19 +1,41 @@
 import { ipcMain, shell } from "electron";
-import path from "node:path";
+import {
+  buildBootstrapPayload,
+  openConfigPath,
+  openDataPath,
+  saveDesktopConfig
+} from "./bridge-core.mjs";
 
-function getDataDir() {
-  if (process.env.SESSION_DB_PATH === ":memory:") {
-    return path.join(process.cwd(), "data");
-  }
-  return path.dirname(process.env.SESSION_DB_PATH || path.join(process.cwd(), "data", "feishu-bot.sqlite"));
-}
+export function registerIpcHandlers(options) {
+  ipcMain.handle("feishu-bot:bootstrap", async () => buildBootstrapPayload());
 
-export function registerIpcHandlers() {
+  ipcMain.handle("feishu-bot:save-config", async (_event, payload) => {
+    const bootstrap = saveDesktopConfig(payload);
+    if (payload?.restartBackend) {
+      await options.restartBackend();
+      return buildBootstrapPayload({ restartRequired: false });
+    }
+    return bootstrap;
+  });
+
+  ipcMain.handle("feishu-bot:restart-backend", async () => {
+    await options.restartBackend();
+    return buildBootstrapPayload({ restartRequired: false });
+  });
+
   ipcMain.handle("feishu-bot:open-config", async () => {
-    await shell.openPath(path.join(process.cwd(), ".env"));
+    return openConfigPath();
   });
 
   ipcMain.handle("feishu-bot:open-data", async () => {
-    await shell.openPath(getDataDir());
+    return openDataPath();
+  });
+
+  ipcMain.handle("feishu-bot:open-external", async (_event, rawUrl) => {
+    const value = String(rawUrl ?? "").trim();
+    if (!value.startsWith("https://")) {
+      throw new Error("only https links are allowed");
+    }
+    await shell.openExternal(value);
   });
 }

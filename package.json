@@ -8,9 +8,16 @@
     "dev": "tsx watch src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "dev:mac": "cross-env ELECTRON_DEV=true concurrently \"pnpm dev\" \"wait-on http://127.0.0.1:3179/health && electron electron/main.mjs\"",
-    "start:mac": "cross-env ELECTRON_DEV=false electron electron/main.mjs",
-    "package:mac": "pnpm build && electron-builder --mac dmg",
+    "rebuild:native:node": "node scripts/rebuild-better-sqlite3.mjs node",
+    "dev:mac": "pnpm rebuild:native:node && pnpm build && swift run --package-path macos/FeishuBotApp",
+    "build:mac": "pnpm build && swift build --package-path macos/FeishuBotApp -c release",
+    "test:mac": "swift test --package-path macos/FeishuBotApp",
+    "start:mac": "pnpm rebuild:native:node && pnpm build && swift run --package-path macos/FeishuBotApp -c release",
+    "package:mac": "pnpm build && swift build --package-path macos/FeishuBotApp -c release && node scripts/package-native-mac-app.mjs",
+    "rebuild:native:electron": "node scripts/rebuild-better-sqlite3.mjs electron",
+    "dev:mac:electron": "pnpm rebuild:native:electron && cross-env ELECTRON_DEV=true concurrently \"pnpm dev\" \"wait-on http://127.0.0.1:3179/health && electron electron/main.mjs\"",
+    "start:mac:electron": "pnpm rebuild:native:electron && cross-env ELECTRON_DEV=false electron electron/main.mjs",
+    "package:mac:electron": "pnpm rebuild:native:electron && pnpm build && electron-builder --mac dmg",
     "test": "vitest run"
   },
   "keywords": [
@@ -46,6 +53,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
+      "electron",
       "esbuild",
       "protobufjs"
     ]
@@ -68,5 +76,6 @@
       ],
       "category": "public.app-category.developer-tools"
     }
-  }
+  },
+  "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }
