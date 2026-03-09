@@ -220,6 +220,64 @@ pnpm package:mac:electron
 
 这样就不需要让 OpenClaw 或 SmartKit 暴露公网入口。
 
+## 换电脑继续开发
+
+GitHub 仓库只保存源码，不保存你本机已经填好的飞书 / 模型配置，也不保存本地 SQLite 会话数据。要在另一台 Mac 上无缝接着用，需要同时迁移代码和本地运行目录。
+
+1. 旧电脑先备份这个目录：
+
+```bash
+$HOME/Library/Application\ Support/Feishu\ Bot
+```
+
+这个目录通常至少包含：
+
+- `.env`
+- `console-settings.json`
+- SQLite 会话与状态数据
+
+2. 新电脑安装基础环境：
+
+- `Node.js >= 20`
+- `corepack` / `pnpm 10.23.0`
+- `Xcode` 或 `Xcode Command Line Tools`
+
+3. 新电脑拉代码并安装依赖：
+
+```bash
+git clone https://github.com/owenshen0907/feishu-bot.git
+cd feishu-bot
+git checkout main
+corepack enable
+corepack prepare pnpm@10.23.0 --activate
+pnpm install
+```
+
+4. 把旧电脑备份出来的运行目录恢复到新电脑：
+
+```bash
+mkdir -p "$HOME/Library/Application Support/Feishu Bot"
+rsync -a "/path/to/Feishu Bot/" "$HOME/Library/Application Support/Feishu Bot/"
+```
+
+5. 恢复完成后，常用命令如下：
+
+```bash
+pnpm dev:mac       # 开发模式启动原生 macOS 控制台
+pnpm start:mac     # release 模式启动原生控制台
+pnpm package:mac   # 重新打包 .app 和 .dmg
+pnpm test          # 运行 Node 测试
+pnpm test:mac      # 运行 Swift 测试
+```
+
+6. 新电脑第一次启动后建议立即验证：
+
+```bash
+curl http://127.0.0.1:3179/health
+```
+
+如果你已经恢复了 `Application Support/Feishu Bot`，原生控制台应直接进入正式控制台，而不是重新显示首次向导；随后可以在“系统设置”里发送一条飞书测试消息，确认机器人连通性。
+
 ## 测试
 
 ```bash
