@@ -1,5 +1,7 @@
 node_modules
 dist
+.native-macos-build
+macos/FeishuBotApp/.build
 .env
 .env.*
 !.env.example
