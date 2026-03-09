@@ -6,6 +6,7 @@ import { InMemoryMessenger } from "../src/adapter/feishu/message-client.js";
 import { SessionStore } from "../src/session-store.js";
 import type {
   AcceptedPayload,
+  BotChatService,
   BridgeEnvelope,
   DiagnosisPayload,
   FeishuReceiveMessageEvent,
@@ -22,7 +23,7 @@ class FakeSmartKit implements SmartKitGateway {
     structured_result: { summary: "诊断完成" },
     canonical_summary: "trace-123 关联请求在网关超时。",
     probable_causes: ["下游超时"],
-    evidence: [{ title: "gateway", detail: "出现 timeout" }],
+    evidence: [{ title: "gateway", detail: "出现 timeout", severity: "error" }],
     recommended_actions: ["检查下游依赖"],
     links: [{ label: "trace", url: "https://example.com" }],
     conversation_id: "conv-1",
@@ -75,6 +76,38 @@ class FakeSmartKit implements SmartKitGateway {
   }
 }
 
+class FakeChatService implements BotChatService {
+  public messages: string[] = [];
+  private readonly memory = new Map<string, string[]>();
+
+  constructor(private readonly available = true) {}
+
+  isAvailable(): boolean {
+    return this.available;
+  }
+
+  async reply(input: { userId: string; message: string }) {
+    this.messages.push(`${input.userId}:${input.message}`);
+    const history = this.memory.get(input.userId) ?? [];
+    history.push(input.message, `回答:${input.message}`);
+    this.memory.set(input.userId, history);
+    return {
+      answer: `我记住了：${input.message}`,
+      memoryCount: history.length
+    };
+  }
+
+  clearMemory(userId: string): number {
+    const count = this.getMemoryCount(userId);
+    this.memory.delete(userId);
+    return count;
+  }
+
+  getMemoryCount(userId: string): number {
+    return this.memory.get(userId)?.length ?? 0;
+  }
+}
+
 function envelope<T>(code: string, data: T, httpStatus: number): BridgeEnvelope<T> {
   return {
     code,
@@ -106,6 +139,10 @@ function buildEvent(text: string, overrides: Partial<FeishuReceiveMessageEvent> 
   };
 }
 
+function renderCardText(messenger: InMemoryMessenger, index: number): string {
+  return JSON.stringify(messenger.replies[index]?.reply.card);
+}
+
 const formatter = new BotFormatter({
   enabled: false,
   apiKey: "",
@@ -115,23 +152,56 @@ const formatter = new BotFormatter({
 });
 
 describe("BotService", () => {
-  it("handles trace query and stores session", async () => {
+  it("handles trace query and returns diagnosis card", async () => {
     const store = new SessionStore(":memory:");
     const messenger = new InMemoryMessenger();
-    const service = new BotService(store, new FakeSmartKit(), messenger, formatter, "smartkit-bot");
+    const service = new BotService(store, new FakeSmartKit(), new FakeChatService(), messenger, formatter, "smartkit-bot");
 
     await service.handleEvent(buildEvent("/trace trace-123"));
 
     expect(messenger.replies).toHaveLength(1);
-    expect(messenger.replies[0]?.text).toContain("结论:");
+    expect(messenger.replies[0]?.reply.kind).toBe("card");
+    expect(renderCardText(messenger, 0)).toContain("Trace诊断结果");
+    expect(renderCardText(messenger, 0)).toContain("结论");
+    expect(renderCardText(messenger, 0)).toContain("证据摘录");
     expect(store.listSessionsAwaitingJobResult()).toHaveLength(0);
+    store.close();
+  });
+
+  it("falls back to local chat in private chat", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const chatService = new FakeChatService();
+    const service = new BotService(store, new FakeSmartKit(), chatService, messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("帮我总结一下今天的工作"));
+
+    expect(chatService.messages).toContain("user-1:帮我总结一下今天的工作");
+    expect(renderCardText(messenger, 0)).toContain("轻量对话助手");
+    expect(renderCardText(messenger, 0)).toContain("我记住了");
+    store.close();
+  });
+
+  it("supports clearing per-user chat memory", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const chatService = new FakeChatService();
+    const service = new BotService(store, new FakeSmartKit(), chatService, messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/chat 你好"));
+    await service.handleEvent(buildEvent("/memory"));
+    await service.handleEvent(buildEvent("/chat-reset"));
+
+    expect(renderCardText(messenger, 1)).toContain("当前聊天记忆");
+    expect(renderCardText(messenger, 2)).toContain("聊天记忆已清空");
+    expect(chatService.getMemoryCount("user-1")).toBe(0);
     store.close();
   });
 
   it("requires mention or slash in group chat", async () => {
     const store = new SessionStore(":memory:");
     const messenger = new InMemoryMessenger();
-    const service = new BotService(store, new FakeSmartKit(), messenger, formatter, "smartkit-bot");
+    const service = new BotService(store, new FakeSmartKit(), new FakeChatService(), messenger, formatter, "smartkit-bot");
 
     await service.handleEvent(buildEvent("查下 trace trace-123", {
       message: {
@@ -153,21 +223,21 @@ describe("BotService", () => {
     const store = new SessionStore(":memory:");
     const messenger = new InMemoryMessenger();
     const smartkit = new FakeSmartKit();
-    const service = new BotService(store, smartkit, messenger, formatter, "smartkit-bot");
+    const service = new BotService(store, smartkit, new FakeChatService(), messenger, formatter, "smartkit-bot");
 
     await service.handleEvent(buildEvent("/trace trace-123"));
     await service.handleEvent(buildEvent("展开原因"));
 
     expect(smartkit.followupCalls).toContain("conv-1:展开原因");
-    expect(messenger.replies.at(-1)?.text).toContain("已展开原因");
+    expect(renderCardText(messenger, 1)).toContain("已展开原因");
     store.close();
   });
 
-  it("polls async jobs and pushes completion", async () => {
+  it("polls async jobs and pushes completion card", async () => {
     const store = new SessionStore(":memory:");
     const messenger = new InMemoryMessenger();
     const smartkit = new FakeSmartKit();
-    const service = new BotService(store, smartkit, messenger, formatter, "smartkit-bot");
+    const service = new BotService(store, smartkit, new FakeChatService(), messenger, formatter, "smartkit-bot");
 
     await service.handleEvent(buildEvent("/uid 123456 1h"));
 
@@ -175,7 +245,8 @@ describe("BotService", () => {
     await poller.tick();
 
     expect(messenger.replies).toHaveLength(2);
-    expect(messenger.replies[1]?.text).toContain("结论:");
+    expect(renderCardText(messenger, 0)).toContain("后台诊断已提交");
+    expect(renderCardText(messenger, 1)).toContain("任务结果诊断结果");
     expect(store.listSessionsAwaitingJobResult()).toHaveLength(0);
     store.close();
   });

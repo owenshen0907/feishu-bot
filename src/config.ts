@@ -23,6 +23,13 @@ function loadEnvProfile(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 const loadedProfile = loadEnvProfile();
+const defaultChatSystemPrompt = [
+  "你是一个部署在飞书里的内部助手。",
+  "当用户不是在查 SmartKit 诊断结果时，你可以直接陪他聊天、答疑、做简短分析和整理思路。",
+  "你要记住同一个用户最近几轮对话上下文，但不要编造公司内部事实。",
+  "输出中文，简洁、自然、可直接发在飞书卡片里。",
+  "如果用户的问题涉及你拿不到的实时内部数据，明确说明你当前只能基于聊天内容回答。"
+].join("\n");
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -43,7 +50,10 @@ const schema = z.object({
   BOT_LLM_API_KEY: z.string().default(""),
   BOT_LLM_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   BOT_LLM_MODEL: z.string().default("gpt-4.1-mini"),
-  BOT_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(15000)
+  BOT_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  BOT_CHAT_ENABLED: z.string().default("true"),
+  BOT_CHAT_MEMORY_MESSAGES: z.coerce.number().int().positive().default(16),
+  BOT_CHAT_SYSTEM_PROMPT: z.string().default(defaultChatSystemPrompt)
 });
 
 export interface AppConfig {
@@ -75,6 +85,11 @@ export interface AppConfig {
     baseUrl: string;
     model: string;
     timeoutMs: number;
+  };
+  botChat: {
+    enabled: boolean;
+    memoryMessages: number;
+    systemPrompt: string;
   };
 }
 
@@ -109,6 +124,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       baseUrl: raw.BOT_LLM_BASE_URL,
       model: raw.BOT_LLM_MODEL,
       timeoutMs: raw.BOT_LLM_TIMEOUT_MS
+    },
+    botChat: {
+      enabled: raw.BOT_CHAT_ENABLED.toLowerCase() === "true",
+      memoryMessages: raw.BOT_CHAT_MEMORY_MESSAGES,
+      systemPrompt: raw.BOT_CHAT_SYSTEM_PROMPT
     }
   };
 }

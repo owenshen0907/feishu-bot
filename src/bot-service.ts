@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { BotFormatter } from "./formatter.js";
-import { logError, logInfo, logWarn } from "./logger.js";
+import { logError, logInfo } from "./logger.js";
 import { cleanMessage, parseMessage } from "./parser/index.js";
 import type {
   AcceptedPayload,
+  BotChatService,
   BotMessenger,
+  BotReplyMessage,
   BridgeEnvelope,
   DiagnosisPayload,
   FeishuMention,
@@ -17,21 +19,20 @@ import { SessionStore } from "./session-store.js";
 
 interface MessageContext {
   aliasKeys: string[];
-  sessionKey: string;
   scope: Scope;
   chatId: string;
   chatType: string;
   userId: string;
   messageId: string;
-  createdAt: string;
-  replyInThread: boolean;
   text: string;
+  replyInThread: boolean;
 }
 
 export class BotService {
   constructor(
     private readonly store: SessionStore,
     private readonly smartkit: SmartKitGateway,
+    private readonly chatService: BotChatService,
     private readonly messenger: BotMessenger,
     private readonly formatter: BotFormatter,
     private readonly botName: string
@@ -60,20 +61,22 @@ export class BotService {
     const session = this.findSession(context.aliasKeys);
     const parsed = parseMessage(context.text, {
       hasThreadContext: Boolean(session),
-      currentJobId: session?.jobId
+      currentJobId: session?.jobId,
+      allowChatFallback: context.scope === "p2p"
     });
 
-    if (parsed.action === "help") {
-      await this.replySafely(context.messageId, this.formatter.formatHelp(), context.replyInThread);
-      return;
-    }
-
     try {
+      if (parsed.action === "help") {
+        await this.replySafely(context.messageId, this.formatter.formatHelp(), context.replyInThread);
+        return;
+      }
+
       const outcome = await this.executeCommand(parsed, session, context);
-      const sentMessage = await this.replySafely(context.messageId, outcome.replyText, context.replyInThread);
+      const sentMessage = await this.replySafely(context.messageId, outcome.reply, context.replyInThread);
       if (!outcome.conversationId) {
         return;
       }
+
       const effectiveRequester = outcome.requesterId ?? session?.requesterId ?? context.userId;
       const record: SessionRecord = {
         sessionId: session?.sessionId ?? randomUUID(),
@@ -91,6 +94,7 @@ export class BotService {
         notificationSentAt: outcome.notificationSentAt ?? session?.notificationSentAt ?? null,
         updatedAt: new Date().toISOString()
       };
+
       const aliases = new Set(context.aliasKeys);
       if (context.chatType === "group") {
         if (sentMessage.threadId) {
@@ -118,7 +122,7 @@ export class BotService {
     session: SessionRecord | undefined,
     context: MessageContext
   ): Promise<{
-    replyText: string;
+    reply: BotReplyMessage;
     conversationId?: string;
     jobId?: string | null;
     jobStatus?: string | null;
@@ -149,13 +153,12 @@ export class BotService {
       case "job": {
         const jobId = parsed.targetId || session?.jobId;
         if (!jobId) {
-          return { replyText: this.formatter.formatHelp() };
+          return { reply: this.formatter.formatHelp() };
         }
         const envelope = await this.smartkit.getJob(jobId);
         ensureBridgeOk(envelope);
-        const replyText = await this.formatter.formatJob(envelope.data);
         return {
-          replyText,
+          reply: await this.formatter.formatJob(envelope.data),
           conversationId: envelope.data.conversation_id || session?.conversationId,
           jobId: envelope.data.job_id,
           jobStatus: envelope.data.status,
@@ -166,7 +169,7 @@ export class BotService {
       }
       case "followup": {
         if (!session?.conversationId) {
-          return { replyText: this.formatter.formatHelp() };
+          return { reply: this.formatter.formatHelp() };
         }
         const requesterId = session.scope === "group" ? session.requesterId : context.userId;
         const envelope = await this.smartkit.followup({
@@ -177,8 +180,32 @@ export class BotService {
         });
         return this.handleBridgeResponse(envelope, parsed.rawText, requesterId, session.scope);
       }
+      case "chat": {
+        if (!this.chatService.isAvailable()) {
+          return { reply: this.formatter.formatChatUnavailable() };
+        }
+        const result = await this.chatService.reply({
+          userId: context.userId,
+          message: parsed.rawText
+        });
+        return {
+          reply: this.formatter.formatChatReply({
+            question: parsed.rawText,
+            answer: result.answer,
+            memoryCount: result.memoryCount
+          })
+        };
+      }
+      case "memory_clear": {
+        const deletedCount = this.chatService.clearMemory(context.userId);
+        return { reply: this.formatter.formatMemoryCleared(deletedCount) };
+      }
+      case "memory_status": {
+        const memoryCount = this.chatService.getMemoryCount(context.userId);
+        return { reply: this.formatter.formatMemoryStatus(memoryCount) };
+      }
       default:
-        return { replyText: this.formatter.formatHelp() };
+        return { reply: this.formatter.formatHelp() };
     }
   }
 
@@ -188,7 +215,7 @@ export class BotService {
     requesterId: string,
     scope: Scope
   ): Promise<{
-    replyText: string;
+    reply: BotReplyMessage;
     conversationId?: string;
     jobId?: string | null;
     jobStatus?: string | null;
@@ -200,7 +227,7 @@ export class BotService {
     if (envelope.code === "accepted") {
       const accepted = envelope.data as AcceptedPayload;
       return {
-        replyText: this.formatter.formatAccepted(accepted),
+        reply: this.formatter.formatAccepted(accepted),
         conversationId: accepted.conversation_id,
         jobId: accepted.job_id,
         jobStatus: accepted.status,
@@ -209,9 +236,10 @@ export class BotService {
         scope
       };
     }
+
     const diagnosis = envelope.data as DiagnosisPayload;
     return {
-      replyText: await this.formatter.formatDiagnosis(diagnosis, question),
+      reply: await this.formatter.formatDiagnosis(diagnosis, question),
       conversationId: diagnosis.conversation_id,
       jobId: diagnosis.job_id ?? null,
       jobStatus: diagnosis.status,
@@ -226,6 +254,7 @@ export class BotService {
     const chatId = event.message.chat_id;
     const chatType = event.message.chat_type;
     const cleanedText = cleanMessage(stripBotName(rawText, this.botName, event.message.mentions ?? []));
+
     if (chatType === "group") {
       const aliasKeys = [
         event.message.thread_id ? buildGroupAlias(chatId, event.message.thread_id) : "",
@@ -235,27 +264,23 @@ export class BotService {
       ].filter(Boolean);
       return {
         aliasKeys,
-        sessionKey: aliasKeys[0],
         scope: "group",
         chatId,
         chatType,
         userId,
         messageId: event.message.message_id,
-        createdAt: event.message.create_time,
         replyInThread: true,
         text: cleanedText
       };
     }
-    const alias = buildP2PAlias(chatId, userId);
+
     return {
-      aliasKeys: [alias],
-      sessionKey: alias,
+      aliasKeys: [buildP2PAlias(chatId, userId)],
       scope: "p2p",
       chatId,
       chatType,
       userId,
       messageId: event.message.message_id,
-      createdAt: event.message.create_time,
       replyInThread: false,
       text: cleanedText
     };
@@ -283,9 +308,9 @@ export class BotService {
     return names.includes(this.botName);
   }
 
-  private async replySafely(messageId: string, text: string, replyInThread: boolean) {
-    const sent = await this.messenger.replyText(messageId, text, { replyInThread });
-    logInfo("reply sent", { messageId, replyInThread });
+  private async replySafely(messageId: string, reply: BotReplyMessage, replyInThread: boolean) {
+    const sent = await this.messenger.replyCard(messageId, reply, { replyInThread });
+    logInfo("reply sent", { messageId, replyInThread, kind: reply.kind });
     return sent;
   }
 }
@@ -309,11 +334,12 @@ function parseTextContent(rawContent: string): string {
 function stripBotName(rawText: string, botName: string, mentions: FeishuMention[]): string {
   let result = rawText;
   for (const mention of mentions) {
-    if (mention.name) {
-      result = result.replaceAll(`@${mention.name}`, " ");
-      if (mention.name === botName) {
-        result = result.replaceAll(mention.name, " ");
-      }
+    if (!mention.name) {
+      continue;
+    }
+    result = result.replaceAll(`@${mention.name}`, " ");
+    if (mention.name === botName) {
+      result = result.replaceAll(mention.name, " ");
     }
   }
   return result;
@@ -328,5 +354,11 @@ function buildGroupAlias(chatId: string, threadKey: string): string {
 }
 
 function toErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message === "chat_unavailable") {
+    return "当前聊天模型未配置，暂时只能使用 SmartKit 排障命令。";
+  }
+  if (error instanceof Error && error.message === "empty_chat_message") {
+    return "聊天消息不能为空。";
+  }
   return error instanceof Error ? error.message : String(error);
 }

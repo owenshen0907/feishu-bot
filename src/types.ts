@@ -2,7 +2,8 @@ export type Mode = "sync" | "async";
 export type Scope = "p2p" | "group";
 export type TargetType = "trace" | "uid";
 export type TimeRange = "15m" | "1h" | "6h" | "1d";
-export type CommandAction = "help" | "trace" | "uid" | "job" | "followup";
+export type CommandAction = "help" | "trace" | "uid" | "job" | "followup" | "chat" | "memory_clear" | "memory_status";
+export type ChatRole = "system" | "user" | "assistant";
 
 export interface BridgeEnvelope<T = unknown> {
   code: string;
@@ -152,8 +153,44 @@ export interface SessionRecord {
   updatedAt: string;
 }
 
+export interface ChatMemoryRecord {
+  role: ChatRole;
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatReply {
+  answer: string;
+  memoryCount: number;
+}
+
+export interface BotChatService {
+  isAvailable(): boolean;
+  reply(input: { userId: string; message: string }): Promise<ChatReply>;
+  clearMemory(userId: string): number;
+  getMemoryCount(userId: string): number;
+}
+
+export interface LarkCardMessage {
+  config?: Record<string, unknown>;
+  header: {
+    template: string;
+    title: {
+      tag: "plain_text";
+      content: string;
+    };
+  };
+  elements: Array<Record<string, unknown>>;
+}
+
+export interface BotReplyMessage {
+  kind: "card";
+  card: LarkCardMessage;
+  textPreview: string;
+}
+
 export interface BotMessenger {
-  replyText(messageId: string, text: string, options?: ReplyOptions): Promise<SentMessage>;
+  replyCard(messageId: string, reply: BotReplyMessage, options?: ReplyOptions): Promise<SentMessage>;
 }
 
 export interface SmartKitGateway {

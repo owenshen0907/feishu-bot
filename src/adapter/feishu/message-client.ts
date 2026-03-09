@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { BotMessenger, ReplyOptions, SentMessage } from "../../types.js";
+import type { BotMessenger, BotReplyMessage, ReplyOptions, SentMessage } from "../../types.js";
 
 export class FeishuMessageClient implements BotMessenger {
   constructor(private readonly client: Lark.Client) {}
 
-  async replyText(messageId: string, text: string, options: ReplyOptions = {}): Promise<SentMessage> {
+  async replyCard(messageId: string, reply: BotReplyMessage, options: ReplyOptions = {}): Promise<SentMessage> {
     const response = await this.client.im.v1.message.reply({
       path: { message_id: messageId },
       data: {
-        msg_type: "text",
-        content: JSON.stringify({ text }),
+        msg_type: "interactive",
+        content: JSON.stringify(reply.card),
         reply_in_thread: options.replyInThread ?? false,
         uuid: randomUUID()
       }
@@ -28,10 +28,10 @@ export class FeishuMessageClient implements BotMessenger {
 }
 
 export class InMemoryMessenger implements BotMessenger {
-  public readonly replies: Array<{ messageId: string; text: string; options: ReplyOptions }> = [];
+  public readonly replies: Array<{ messageId: string; reply: BotReplyMessage; options: ReplyOptions }> = [];
 
-  async replyText(messageId: string, text: string, options: ReplyOptions = {}): Promise<SentMessage> {
-    this.replies.push({ messageId, text, options });
+  async replyCard(messageId: string, reply: BotReplyMessage, options: ReplyOptions = {}): Promise<SentMessage> {
+    this.replies.push({ messageId, reply, options });
     return {
       messageId: `bot-${this.replies.length}`,
       rootId: options.replyInThread ? messageId : undefined,

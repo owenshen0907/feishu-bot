@@ -51,8 +51,8 @@ export class JobPoller {
         if (!["completed", "failed"].includes(job.status)) {
           continue;
         }
-        const text = await this.formatter.formatJob(job);
-        await this.messenger.replyText(session.anchorMessageId, text, { replyInThread: session.scope === "group" });
+        const reply = await this.formatter.formatJob(job);
+        await this.messenger.replyCard(session.anchorMessageId, reply, { replyInThread: session.scope === "group" });
         this.store.markJobNotified(session.sessionId, job.status, new Date().toISOString());
         logInfo("job result pushed", { jobId: session.jobId, status: job.status });
       }

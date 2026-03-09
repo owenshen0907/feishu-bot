@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import type { SessionRecord } from "./types.js";
+import type { ChatMemoryRecord, ChatRole, SessionRecord } from "./types.js";
 
 function ensureParentDir(dbPath: string): void {
   if (dbPath === ":memory:") {
@@ -150,6 +150,75 @@ export class SessionStore {
       .run(jobStatus, notifiedAt, notifiedAt, sessionId);
   }
 
+  listChatMemory(userId: string, limit: number): ChatMemoryRecord[] {
+    if (!userId || limit <= 0) {
+      return [];
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT role, content, created_at
+         FROM chat_memories
+         WHERE user_id = ?
+         ORDER BY id DESC
+         LIMIT ?`
+      )
+      .all(userId, limit) as Array<Record<string, unknown>>;
+    return rows.reverse().map((row) => ({
+      role: normalizeChatRole(row.role),
+      content: String(row.content ?? ""),
+      createdAt: String(row.created_at ?? "")
+    }));
+  }
+
+  appendChatMemory(userId: string, messages: ChatMemoryRecord[], maxMessages: number): number {
+    if (!userId || messages.length === 0) {
+      return this.getChatMemoryCount(userId);
+    }
+    const transaction = this.db.transaction((ownerId: string, records: ChatMemoryRecord[], limit: number) => {
+      const insertStmt = this.db.prepare(
+        `INSERT INTO chat_memories (user_id, role, content, created_at)
+         VALUES (?, ?, ?, ?)`
+      );
+      for (const message of records) {
+        insertStmt.run(ownerId, message.role, message.content, message.createdAt);
+      }
+      this.db
+        .prepare(
+          `DELETE FROM chat_memories
+           WHERE user_id = ?
+             AND id NOT IN (
+               SELECT id FROM chat_memories
+               WHERE user_id = ?
+               ORDER BY id DESC
+               LIMIT ?
+             )`
+        )
+        .run(ownerId, ownerId, limit);
+    });
+    transaction(userId, messages, Math.max(1, maxMessages));
+    return this.getChatMemoryCount(userId);
+  }
+
+  clearChatMemory(userId: string): number {
+    if (!userId) {
+      return 0;
+    }
+    const result = this.db
+      .prepare("DELETE FROM chat_memories WHERE user_id = ?")
+      .run(userId);
+    return result.changes;
+  }
+
+  getChatMemoryCount(userId: string): number {
+    if (!userId) {
+      return 0;
+    }
+    const row = this.db
+      .prepare("SELECT COUNT(1) AS total FROM chat_memories WHERE user_id = ?")
+      .get(userId) as { total?: number } | undefined;
+    return Number(row?.total ?? 0);
+  }
+
   private init(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -179,6 +248,17 @@ export class SessionStore {
         message_id TEXT PRIMARY KEY,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS chat_memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_memories_user_id_id
+      ON chat_memories(user_id, id DESC);
     `);
   }
 
@@ -200,4 +280,8 @@ export class SessionStore {
       updatedAt: String(row.updated_at ?? "")
     };
   }
+}
+
+function normalizeChatRole(value: unknown): ChatRole {
+  return value === "assistant" || value === "system" ? value : "user";
 }

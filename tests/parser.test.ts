@@ -16,6 +16,17 @@ describe("parseMessage", () => {
     expect(parsed.timeRange).toBe("1h");
   });
 
+  it("parses explicit chat command", () => {
+    const parsed = parseMessage("/chat 帮我总结一下今天的工作", { hasThreadContext: false });
+    expect(parsed.action).toBe("chat");
+    expect(parsed.rawText).toBe("帮我总结一下今天的工作");
+  });
+
+  it("falls back to chat in private chat when no command matches", () => {
+    const parsed = parseMessage("你觉得这个方案怎么样", { hasThreadContext: false, allowChatFallback: true });
+    expect(parsed.action).toBe("chat");
+  });
+
   it("falls back to followup inside thread context", () => {
     const parsed = parseMessage("展开原因", { hasThreadContext: true });
     expect(parsed.action).toBe("followup");

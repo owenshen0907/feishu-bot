@@ -1,12 +1,13 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { FeishuLongConnection } from "./adapter/feishu/long-connection.js";
+import { FeishuMessageClient } from "./adapter/feishu/message-client.js";
 import { BotService } from "./bot-service.js";
+import { ChatService } from "./chat-service.js";
 import { loadConfig } from "./config.js";
 import { BotFormatter } from "./formatter.js";
 import { startHealthServer } from "./health-server.js";
 import { JobPoller } from "./job-poller.js";
 import { logError, logInfo } from "./logger.js";
-import { FeishuLongConnection } from "./adapter/feishu/long-connection.js";
-import { FeishuMessageClient } from "./adapter/feishu/message-client.js";
 import { SessionStore } from "./session-store.js";
 import { SmartKitClient } from "./smartkit-client.js";
 
@@ -14,6 +15,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const store = new SessionStore(config.session.dbPath);
   const smartkit = new SmartKitClient(config.smartkit);
+  const chatService = new ChatService(store, config.botLlm, config.botChat);
   const formatter = new BotFormatter(config.botLlm);
   const larkClient = new Lark.Client({
     appId: config.feishu.appId,
@@ -21,7 +23,7 @@ async function main(): Promise<void> {
     loggerLevel: Lark.LoggerLevel.info
   });
   const messenger = new FeishuMessageClient(larkClient);
-  const botService = new BotService(store, smartkit, messenger, formatter, config.feishu.botName);
+  const botService = new BotService(store, smartkit, chatService, messenger, formatter, config.feishu.botName);
   const poller = new JobPoller(store, smartkit, messenger, formatter, config.session.jobPollIntervalMs);
   const connection = new FeishuLongConnection(
     {
@@ -45,6 +47,7 @@ async function main(): Promise<void> {
     getPayload: () => ({
       profile: config.profile,
       dbPath: config.session.dbPath,
+      chatEnabled: config.botChat.enabled,
       reconnect: connection.getReconnectInfo()
     })
   });
