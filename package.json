@@ -3,11 +3,14 @@
   "version": "2.0.0",
   "description": "Lightweight Feishu long-connection bot for SmartKit bridge.",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "electron/main.mjs",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "dev:mac": "cross-env ELECTRON_DEV=true concurrently \"pnpm dev\" \"wait-on http://127.0.0.1:3179/health && electron electron/main.mjs\"",
+    "start:mac": "cross-env ELECTRON_DEV=false electron electron/main.mjs",
+    "package:mac": "pnpm build && electron-builder --mac dmg",
     "test": "vitest run"
   },
   "keywords": [
@@ -23,11 +26,16 @@
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.3.1",
     "openai": "^6.27.0",
+    "wait-on": "^9.0.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.3.5",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^40.8.0",
+    "electron-builder": "^26.8.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
@@ -41,5 +49,24 @@
       "esbuild",
       "protobufjs"
     ]
+  },
+  "build": {
+    "appId": "com.smartkit.feishubot",
+    "productName": "Feishu Bot",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "package.json",
+      ".env*",
+      "data/**/*"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    }
   }
 }

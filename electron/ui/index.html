@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Feishu Bot 控制台</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Space Grotesk", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #0f1115;
+      }
+      body {
+        margin: 0;
+        padding: 28px;
+        min-height: 100vh;
+        background: radial-gradient(circle at top, rgba(255,255,255,0.12), transparent 60%), #0f1115;
+        color: #f9f5ef;
+      }
+      .card {
+        background: rgba(20,24,34,0.8);
+        border-radius: 20px;
+        padding: 20px;
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 20px 45px rgba(0,0,0,0.45);
+      }
+      h1 {
+        margin-top: 0;
+        font-size: 26px;
+      }
+      .status {
+        margin: 12px 0 20px;
+        font-size: 15px;
+        line-height: 1.6;
+        white-space: pre-line;
+      }
+      button {
+        appearance: none;
+        border: none;
+        border-radius: 999px;
+        padding: 10px 20px;
+        font-weight: 600;
+        background: linear-gradient(135deg, #ffbb52, #fe6c63);
+        color: #0f1115;
+        cursor: pointer;
+        box-shadow: 0 12px 24px rgba(254,108,99,0.35);
+      }
+      ul {
+        padding-left: 20px;
+      }
+      code {
+        background: rgba(255,255,255,0.08);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Feishu Bot</h1>
+      <div id="status" class="status">正在检查健康状态...</div>
+      <button id="refresh">立即刷新</button>
+      <h2 style="margin-top:24px">使用提示</h2>
+      <ul>
+        <li>在应用根目录填写 <code>.env</code>，配置飞书和 SmartKit 参数。</li>
+        <li>健康检查默认监听 <code>127.0.0.1:3179</code>，可在 <code>.env</code> 调整。</li>
+        <li>关闭窗口即退出应用，长连接也会断开。</li>
+      </ul>
+    </div>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const host = params.get('host') || '127.0.0.1';
+      const port = params.get('port') || '3179';
+      const statusEl = document.getElementById('status');
+      const refreshBtn = document.getElementById('refresh');
+
+      async function queryHealth() {
+        statusEl.textContent = '正在刷新...';
+        try {
+          const response = await fetch(`http://${host}:${port}/health`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+          statusEl.textContent = `Profile: ${data.profile}\nDB: ${data.dbPath}\n聊天: ${data.chatEnabled ? '已启用' : '未启用'}\n长连接: ${data.reconnect?.status ?? 'unknown'}`;
+        } catch (error) {
+          statusEl.textContent = `无法获取健康状态：${error.message}`;
+        }
+      }
+
+      refreshBtn.addEventListener('click', () => void queryHealth());
+      queryHealth();
+      setInterval(queryHealth, 15000);
+    </script>
+  </body>
+</html>

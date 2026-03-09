@@ -2,13 +2,14 @@
 
 一个独立的、适合本地电脑部署的 `Feishu -> SmartKit` 长连接 Bot。
 
-它只做 5 件事：
+它只做 6 件事：
 
 - 用飞书长连接接收消息，不需要公网 webhook
 - 解析命令和少量口语别名
 - 调用 SmartKit `/api/bridge/*`
-- 用 Bot 侧 LLM 把结果整理成更适合飞书阅读的短文本
+- 用 Bot 侧 LLM 把结果整理成更适合飞书阅读的卡片摘要
 - 维护会话 / 线程 / 异步任务状态，支持后续追问和任务补发
+- 提供一个不依赖 SmartKit 的轻量聊天模式，并按用户独立保存记忆
 
 ## 架构定位
 
@@ -24,10 +25,16 @@
 - `/uid <uid> [15m|1h|6h|1d]`
 - `/uid-async <uid> [15m|1h|6h|1d]`
 - `/job <job_id>`
+- `/chat <message>`
+- `/memory`
+- `/chat-reset`
 - 口语别名：`查下 trace xxx`、`帮我看 uid 123456`、`这个任务现在怎样了`
 - 私聊连续追问
+- 私聊未命中命令时自动进入聊天模式
 - 群聊 `@bot` 或 Slash 触发
 - 异步任务自动轮询，完成后回帖补发
+- 飞书回复默认使用卡片，按“结论 / 原因 / 建议 / 证据”分块展示
+- 聊天记忆按用户隔离，不和其他人的上下文混用
 
 ## 为什么适合本地部署
 
@@ -43,8 +50,9 @@
 - `src/adapter/feishu/`：飞书 SDK 封装与长连接入口
 - `src/parser/`：命令和口语解析
 - `src/smartkit-client.ts`：SmartKit Bridge API 客户端
+- `src/chat-service.ts`：独立聊天与用户记忆
 - `src/formatter.ts`：Bot 侧 LLM / 模板可读化
-- `src/session-store.ts`：SQLite 会话、线程、幂等、任务状态
+- `src/session-store.ts`：SQLite 会话、线程、幂等、任务状态、聊天记忆
 - `src/bot-service.ts`：消息编排与会话控制
 - `src/job-poller.ts`：异步任务轮询与结果补发
 
@@ -69,6 +77,7 @@ pnpm install
 - `FEISHU_BOT_NAME`
 - `SMARTKIT_BASE_URL`
 - `SMARTKIT_TOKEN`（如果 SmartKit Bridge 开启了鉴权）
+- `BOT_LLM_API_KEY`（如果你要启用独立聊天）
 
 ## 环境分层
 
@@ -117,6 +126,34 @@ pnpm start
 - 启动本地任务轮询器
 - 启动一个本地健康检查端口（默认 `127.0.0.1:3179`）
 
+## 打包成 macOS App
+
+- 本地调试桌面版（Electron 壳）：
+
+```bash
+pnpm dev
+# 另开终端
+pnpm dev:mac
+```
+
+第一条命令启动长连接/健康检查服务，第二条命令启动 Electron 外壳。
+
+- 直接运行桌面壳使用现有构建：
+
+```bash
+pnpm start:mac
+```
+
+确保 `.env` 已配置并且 `pnpm build` 生成了 `dist/index.js`。
+
+- 打包 DMG：
+
+```bash
+pnpm package:mac
+```
+
+生成的安装包在 `dist/mac`，默认产品名为 “Feishu Bot”。Electron 壳会在启动时内嵌启动 Node 后端，并轮询健康检查端口后再展示状态页。Help 菜单可以快速打开 `.env` 和数据目录。
+
 ## 飞书权限建议
 
 应用侧至少需要：
@@ -130,17 +167,23 @@ pnpm start
 ## 消息规则
 
 - 私聊：直接支持命令、追问、异步任务查询
+- 私聊：普通消息如果没匹配到排障命令，会自动进入聊天模式
 - 群聊：必须 `@bot` 或 Slash 才触发
 - 群聊追问：默认沿用首条诊断发起人的 `requester_id` 和权限上下文
 - Bot 不直接展示 JSON，不直接展示原始日志全文
+- `/chat-reset` 只清当前用户自己的聊天记忆，不影响 SmartKit 诊断会话
 
 ## 常见消息示例
 
 - `/trace 7f8e9a0b1234`
 - `/trace-async 7f8e9a0b1234`
 - `/uid 123456 1h`
+- `/chat 帮我梳理一下这次改造的风险`
+- `/memory`
+- `/chat-reset`
 - `查下 trace 7f8e9a0b1234`
 - `帮我看 uid 123456`
+- `你觉得这个方案还缺什么`
 - `展开原因`
 - `再查过去 1h`
 - `这个任务现在怎样了`
