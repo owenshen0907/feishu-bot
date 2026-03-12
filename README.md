@@ -1,21 +1,21 @@
 # Feishu Bot
 
-一个独立的、适合本地电脑部署的 `Feishu -> SmartKit` 长连接 Bot。
+一个独立的、适合本地电脑部署的飞书长连接 Bot，可按需挂载多个自定义 HTTP 组件。
 
 它只做 6 件事：
 
 - 用飞书长连接接收消息，不需要公网 webhook
 - 解析命令和少量口语别名
-- 调用 SmartKit `/api/bridge/*`
+- 调用自定义 HTTP 组件的 `/api/bridge/*`
 - 用 Bot 侧 LLM 把结果整理成更适合飞书阅读的卡片摘要
 - 维护会话 / 线程 / 异步任务状态，支持后续追问和任务补发
-- 提供一个不依赖 SmartKit 的轻量聊天模式，并按用户独立保存记忆
+- 提供一个不依赖组件的轻量聊天模式，并按用户独立保存记忆
 
 ## 架构定位
 
-- `smartkit`：唯一事实源，负责日志接口、脱敏、诊断、会话、异步任务
+- `component service`：事实源，负责日志接口、脱敏、诊断、会话、异步任务
 - `feishu-bot`：飞书入口，负责命令解析、消息线程映射、可读化表达
-- `openclaw`：继续消费 SmartKit 标准接口，不直接碰日志平台
+- 其它客户端：如果也实现同一套 `diagnostic-bridge/v1`，可以并行复用相同后端
 
 ## 当前能力
 
@@ -33,7 +33,7 @@
 - 私聊未命中命令时自动进入聊天模式
 - 群聊 `@bot` 或 Slash 触发
 - 异步任务自动轮询，完成后回帖补发
-- 飞书回复默认使用卡片，按“结论 / 原因 / 建议 / 证据”分块展示
+- 飞书回复会根据场景自动选择文本或卡片；需要结构化表达时再按“结论 / 原因 / 建议 / 证据”分块展示
 - 聊天记忆按用户隔离，不和其他人的上下文混用
 
 ## 为什么适合本地部署
@@ -42,14 +42,14 @@
 
 - 不需要公网回调地址
 - 不需要内网穿透
-- 只要你的电脑能同时访问飞书开放平台和内网 SmartKit 即可
+- 只要你的电脑能同时访问飞书开放平台和内网诊断服务即可
 - 适合个人电脑常驻、开发机常驻，或者轻量服务器部署
 
 ## 目录结构
 
 - `src/adapter/feishu/`：飞书 SDK 封装与长连接入口
 - `src/parser/`：命令和口语解析
-- `src/smartkit-client.ts`：SmartKit Bridge API 客户端
+- `src/diagnostic-http-client.ts`：诊断 HTTP Bridge API 客户端
 - `src/chat-service.ts`：独立聊天与用户记忆
 - `src/formatter.ts`：Bot 侧 LLM / 模板可读化
 - `src/session-store.ts`：SQLite 会话、线程、幂等、任务状态、聊天记忆
@@ -75,9 +75,20 @@ pnpm install
 - `FEISHU_APP_ID`
 - `FEISHU_APP_SECRET`
 - `FEISHU_BOT_NAME`
-- `SMARTKIT_BASE_URL`
-- `SMARTKIT_TOKEN`（如果 SmartKit Bridge 开启了鉴权）
+- `DIAGNOSTIC_HTTP_BASE_URL`
+- `DIAGNOSTIC_HTTP_TOKEN`（如果组件开启了鉴权）
 - `BOT_LLM_API_KEY`（如果你要启用独立聊天）
+
+旧的 `SMARTKIT_*` 变量名仍兼容读取，但新配置建议统一使用 `DIAGNOSTIC_HTTP_*`。
+
+如果接入方提供了 `http-component-bundle/v1`，也可以直接在桌面控制台的「自定义 HTTP 组件」面板里粘贴一键配置 JSON，再保存并测试连通性；旧的 `smartkit-provider-bundle/v1` 也兼容。
+
+## 自定义 HTTP 组件接入
+
+- 所有第三方日志 / 诊断平台统一使用 `diagnostic-bridge/v1` HTTP 套件，只要实现 Trace / UID / Job / Conversation 这些接口即可被机器人消费。
+- 平台侧建议输出 `http-component-bundle/v1` JSON；桌面控制台也兼容旧的 `smartkit-provider-bundle/v1`。
+- 每个导入的组件都会作为一条独立能力出现在群组 / 用户配置页，支持分别授权、分别描述用途、分别测试连通性。
+- 规范、示例 curl 以及可复用的 JSON 模板都收敛在 [`docs/diagnostic-bridge.md`](docs/diagnostic-bridge.md)。
 
 ## 环境分层
 
@@ -123,10 +134,9 @@ pnpm start
 ### 桌面版常用命令（2026-03-09 实测）
 
 - `pnpm dev`：在本地启动长连接与健康检查服务，内部是 `tsx watch src/index.ts`。若 `.env` 里缺少飞书或模型凭据，会在日志里提示 “credentials are missing”，但健康检查端口会照常监听在 `127.0.0.1:3179`。
-- `pnpm dev:mac`：启动新的原生 macOS 控制台。它会先执行 `pnpm build` 生成 Node bridge 和后端，再用 `swift run --package-path macos/FeishuBotApp` 拉起固定尺寸的 SwiftUI 桌面壳。
+- `pnpm dev:mac`：启动原生 macOS 控制台。它会先执行 `pnpm build` 生成 Node bridge 和后端，再用 `swift run --package-path macos/FeishuBotApp` 拉起 SwiftUI 桌面壳。
 - `pnpm test:mac`：运行原生 macOS 控制台的 Swift 单元测试。
-- `pnpm package:mac`：生成原生 `.app` 和 `.dmg`，输出目录为 `dist/native-macos`。
-- `pnpm dev:mac:electron`：旧 Electron 壳保留为迁移期备用入口；只有在需要回查老界面或兼容链路时才使用。
+- `pnpm package:mac`：生成原生 `.app` 和 `.dmg`，发布产物位于 `dist/native-macos`。
 
 启动后会做三件事：
 
@@ -142,7 +152,7 @@ pnpm start
 pnpm dev:mac
 ```
 
-这会先构建 `dist/desktop-bridge-cli.js` 与 Node 后端，再启动固定尺寸 `1440x900` 的 SwiftUI 控制台。
+这会先构建 `dist/desktop-bridge-cli.js` 与 Node 后端，再启动自适应屏幕尺寸的 SwiftUI 控制台。
 
 - 运行 release 模式原生桌面壳：
 
@@ -163,15 +173,7 @@ pnpm package:mac
 - `Feishu Bot.app`
 - `Feishu Bot.dmg`
 
-原生 App 会把 Swift 可执行文件、bundled Node runtime、`dist/`、`node_modules/`、bridge 脚本与 `runtime-config.mjs` 一起打进 bundle。配置仍写入用户本地 `Application Support/Feishu Bot`，不会写回安装目录。
-
-- 迁移期保留旧 Electron 壳：
-
-```bash
-pnpm dev:mac:electron
-pnpm start:mac:electron
-pnpm package:mac:electron
-```
+原生 App 会把 Swift 可执行文件、bundled Node runtime、`dist/`、`node_modules/`、bridge 脚本与 `desktop/runtime-config.mjs` 一起打进 bundle。配置仍写入用户本地 `Application Support/Feishu Bot`，不会写回安装目录。
 
 ## 飞书权限建议
 
@@ -190,7 +192,7 @@ pnpm package:mac:electron
 - 群聊：必须 `@bot` 或 Slash 才触发
 - 群聊追问：默认沿用首条诊断发起人的 `requester_id` 和权限上下文
 - Bot 不直接展示 JSON，不直接展示原始日志全文
-- `/chat-reset` 只清当前用户自己的聊天记忆，不影响 SmartKit 诊断会话
+- `/chat-reset` 只清当前用户自己的聊天记忆，不影响诊断会话
 
 ## 常见消息示例
 
@@ -216,9 +218,9 @@ pnpm package:mac:electron
 3. 飞书事件订阅切换到长连接模式
 4. 保证本机能访问：
    - `open.feishu.cn`
-   - SmartKit 所在内网地址
+   - 诊断服务所在内网地址
 
-这样就不需要让 OpenClaw 或 SmartKit 暴露公网入口。
+这样就不需要让诊断服务暴露公网入口。
 
 ## 换电脑继续开发
 

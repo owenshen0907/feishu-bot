@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "permissions": {
+    "defaultMode": "allow",
+    "groups": [],
+    "users": []
+  },
+  "ui": {
+    "onboardingCompleted": false,
+    "lastVisitedSection": "thread",
+    "feishuTestReceiveId": "",
+    "feishuTestReceiveIdType": "chat_id"
+  }
+}
