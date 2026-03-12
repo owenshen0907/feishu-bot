@@ -1,10 +1,15 @@
 import OpenAI from "openai";
+import { isDiagnosticComponentCapability } from "./diagnostic-components.js";
 import type { AppConfig } from "./config.js";
 import type {
   AcceptedPayload,
-  BotReplyMessage,
+  BotOutboundMessage,
+  CapabilityID,
+  DiagnosticComponentProfile,
   DiagnosisPayload,
   EvidenceItem,
+  HelpCapabilitySummaryItem,
+  HelpContentProvider,
   JobPayload,
   LarkCardMessage,
   LinkItem
@@ -13,58 +18,68 @@ import type {
 export class BotFormatter {
   private client?: OpenAI;
 
-  constructor(private readonly config: AppConfig["botLlm"]) {}
+  constructor(
+    private readonly config: AppConfig["botLlm"],
+    private readonly helpContentProvider?: HelpContentProvider
+  ) {}
 
-  formatHelp(): BotReplyMessage {
+  private capabilityLabel(capabilityID: CapabilityID): string {
+    if (isDiagnosticComponentCapability(capabilityID)) {
+      return "自定义 HTTP 组件";
+    }
+    switch (capabilityID) {
+      case "chat":
+        return "普通聊天";
+      case "diagnosticHttp":
+      case "smartkit":
+        return "自定义 HTTP 组件";
+      case "webSearch":
+        return "联网搜索";
+      case "voiceReply":
+        return "语音回复";
+      case "vision":
+        return "视觉理解";
+    }
+  }
+
+  formatHelp(input: { capabilities?: HelpCapabilitySummaryItem[] } = {}): BotOutboundMessage {
+    const help = this.helpContentProvider?.getHelpContent();
+    const title = help?.title || "Feishu 诊断助手";
+    const summary = help?.summary || "这里会先说明机器人怎么用，再按当前对象已开通的能力，自动列出可直接使用的功能说明。";
+    const newCommandDescription = help?.newCommandDescription || "开启一个新话题，并清空你自己的聊天上下文。";
+    const capabilityLines = [
+      `- \`/new\`：${normalizeInline(newCommandDescription, 180)}`,
+      ...(input.capabilities?.length
+        ? input.capabilities.map((item) => {
+            const label = item.command
+              ? `${normalizeInline(item.title, 60)}（\`${normalizeInline(item.command, 40)}\`）`
+              : normalizeInline(item.title, 60);
+            return `- ${label}：${normalizeInline(item.description, 180)}`;
+          })
+        : ["- 当前对象还没有额外开通能力；如需授权，可在桌面控制台里打开对应能力卡片。"])
+    ];
+
     const card = buildCard({
-      title: "SmartKit 飞书助手",
+      title,
       template: "blue",
       elements: [
-        markdownBlock("这是一张**命令优先 + 对话补充**的飞书助手卡片。你可以查 `trace_id` / `uid`，也可以直接把它当一个带记忆的聊天助手来用。"),
+        markdownBlock(normalizeMultiline(summary, 420)),
         divider(),
-        fieldGrid([
-          ["诊断对象", "`trace_id` / `uid`"],
-          ["聊天模式", "私聊可直接聊天"],
-          ["群聊规则", "`@bot` 或 Slash 触发"],
-          ["记忆范围", "按用户独立保存"]
-        ]),
         markdownBlock([
-          "**排障命令**",
-          "- `/trace <trace_id>`",
-          "- `/trace-async <trace_id>`",
-          "- `/uid <uid> [15m|1h|6h|1d]`",
-          "- `/uid-async <uid> [15m|1h|6h|1d]`",
-          "- `/job <job_id>`"
-        ].join("\n")),
-        markdownBlock([
-          "**聊天命令**",
-          "- `/chat <问题>`：走独立对话，不依赖 SmartKit",
-          "- `/memory`：查看你当前记忆条数",
-          "- `/chat-reset`：清空你自己的聊天记忆"
-        ].join("\n")),
-        markdownBlock([
-          "**口语示例**",
-          "- 查下 trace 7f8e9a0b1234",
-          "- 帮我看 uid 123456",
-          "- 帮我梳理一下这个需求的实现思路",
-          "- 展开原因",
-          "- 再查过去 1h"
-        ].join("\n")),
-        noteBlock([
-          "私聊里如果消息没有匹配到排障命令，会自动进入聊天模式。",
-          "安全：排障结果只展示脱敏摘要；聊天记忆按用户隔离。"
-        ])
+          "**当前已为你开通的功能**",
+          ...capabilityLines
+        ].join("\n"))
       ]
     });
 
     return {
       kind: "card",
       card,
-      textPreview: "SmartKit 飞书助手使用说明"
+      textPreview: `${normalizeInline(title, 80)}使用说明`
     };
   }
 
-  formatAccepted(data: AcceptedPayload): BotReplyMessage {
+  formatAccepted(data: AcceptedPayload): BotOutboundMessage {
     const queryCommand = `/job ${data.job_id}`;
     const card = buildCard({
       title: data.target_type === "trace" ? "Trace 后台诊断已提交" : "UID 后台诊断已提交",
@@ -79,7 +94,7 @@ export class BotFormatter {
         divider(),
         markdownBlock([
           "**接下来会发生什么**",
-          "- SmartKit 会在后台继续取证并更新诊断结果",
+          "- 组件会在后台继续取证并更新结果",
           "- 你可以稍后手动查询，也可以等待 Bot 自动补发结果",
           `- 手动查询命令：${code(queryCommand)}`
         ].join("\n")),
@@ -96,7 +111,7 @@ export class BotFormatter {
     };
   }
 
-  async formatDiagnosis(data: DiagnosisPayload, question = "", options: { titlePrefix?: string } = {}): Promise<BotReplyMessage> {
+  async formatDiagnosis(data: DiagnosisPayload, question = "", options: { titlePrefix?: string } = {}): Promise<BotOutboundMessage> {
     const readableSummary = await this.renderReadableSummary(data, question);
     const elements: Array<Record<string, unknown>> = [
       fieldGrid([
@@ -149,7 +164,7 @@ export class BotFormatter {
     };
   }
 
-  async formatJob(job: JobPayload): Promise<BotReplyMessage> {
+  async formatJob(job: JobPayload): Promise<BotOutboundMessage> {
     if (job.status === "completed" && job.result_payload) {
       return this.formatDiagnosis(job.result_payload, `/job ${job.job_id}`, { titlePrefix: "任务结果" });
     }
@@ -166,7 +181,7 @@ export class BotFormatter {
             ["会话号", code(job.conversation_id)]
           ]),
           divider(),
-          markdownBlock(`**失败原因**\n${normalizeMultiline(job.error_message || "SmartKit 未返回更多错误信息。")}`),
+          markdownBlock(`**失败原因**\n${normalizeMultiline(job.error_message || "组件未返回更多错误信息。")}`),
           noteBlock([
             "建议：稍后重试，或回到原会话里继续追问。",
             `可再次查询：${code(`/job ${job.job_id}`)}`
@@ -194,7 +209,7 @@ export class BotFormatter {
         divider(),
         markdownBlock([
           "**当前说明**",
-          "- SmartKit 还在继续取证或等待下游返回",
+          "- 组件还在继续取证或等待下游返回",
           "- 你可以稍后手动查一次，或等待 Bot 自动补发完成结果",
           `- 手动查询：${code(`/job ${job.job_id}`)}`
         ].join("\n"))
@@ -208,141 +223,125 @@ export class BotFormatter {
     };
   }
 
-  formatChatReply(input: { question: string; answer: string; memoryCount: number }): BotReplyMessage {
-    const card = buildCard({
-      title: "轻量对话助手",
-      template: "indigo",
-      elements: [
-        markdownBlock(`**你的问题**\n${normalizeMultiline(input.question, 300)}`),
-        divider(),
-        markdownBlock(`**回复**\n${normalizeMultiline(input.answer, 1400)}`),
-        noteBlock([
-          `当前已记住 ${input.memoryCount} 条与你相关的聊天上下文。`,
-          "你可以继续追问；如果要清空记忆，发送 `/chat-reset`。",
-          "这个聊天能力不依赖 SmartKit 诊断接口，可单独使用。"
-        ])
-      ]
-    });
-
-    return {
-      kind: "card",
-      card,
-      textPreview: `聊天回复：${normalizeInline(input.answer)}`
-    };
+  formatChatReply(input: { question: string; answer: string; memoryCount: number }): BotOutboundMessage {
+    return textReply(
+      [
+        input.answer.trim(),
+        "",
+        `已记住 ${input.memoryCount} 条与你相关的聊天上下文。`,
+        "继续追问即可；如果要清空记忆，发送 /new。"
+      ].join("\n"),
+      `聊天回复：${normalizeInline(input.answer)}`
+    );
   }
 
-  formatChatUnavailable(): BotReplyMessage {
-    const card = buildCard({
-      title: "聊天能力暂不可用",
-      template: "orange",
-      elements: [
-        markdownBlock([
-          "当前 Bot 侧聊天模型还没准备好，所以暂时不能走独立聊天。",
-          "你仍然可以继续使用 `/trace`、`/uid`、`/job` 这些 SmartKit 排障命令。"
-        ].join("\n\n")),
-        noteBlock([
-          "如要启用聊天，请配置 `BOT_LLM_API_KEY` / `BOT_LLM_BASE_URL` / `BOT_LLM_MODEL`，并打开 `BOT_CHAT_ENABLED=true`。"
-        ])
-      ]
-    });
-
-    return {
-      kind: "card",
-      card,
-      textPreview: "聊天能力暂不可用"
-    };
+  formatChatUnavailable(): BotOutboundMessage {
+    return textReply(
+      [
+        "聊天能力暂不可用。",
+        "当前 Bot 侧聊天模型还没准备好，所以暂时不能走独立聊天。",
+        "你仍然可以继续使用 /trace、/uid、/job 这些诊断命令。",
+        "如要启用聊天，请配置 BOT_LLM_API_KEY / BOT_LLM_BASE_URL / BOT_LLM_MODEL，并打开 BOT_CHAT_ENABLED=true。"
+      ].join("\n"),
+      "聊天能力暂不可用"
+    );
   }
 
-  formatSmartKitUnavailable(): BotReplyMessage {
-    const card = buildCard({
-      title: "SmartKit 诊断尚未接入",
-      template: "orange",
-      elements: [
-        markdownBlock([
-          "当前还没有配置 SmartKit Bridge，所以 `/trace`、`/uid`、`/job` 这类诊断命令暂时不可用。",
-          "桌面应用和机器人本身可以继续正常使用。"
-        ].join("\n\n")),
-        noteBlock([
-          "如果你只想把它当普通机器人使用，可以直接发 `/chat 你的问题`，或在私聊里直接说话。",
-          "以后补上 `SMARTKIT_BASE_URL` 和 `SMARTKIT_TOKEN` 后，再重启应用即可打开诊断能力。"
-        ])
-      ]
-    });
-
-    return {
-      kind: "card",
-      card,
-      textPreview: "SmartKit 诊断尚未接入"
-    };
+  formatDiagnosticUnavailable(): BotOutboundMessage {
+    return textReply(
+      [
+        "当前还没有可用的自定义 HTTP 组件。",
+        "当没有组件接入，或者组件的全局开关还没打开时，/trace、/uid、/job 这类命令暂时不可用。",
+        "如果你只想把它当普通机器人使用，可以直接发 /chat 你的问题，或在私聊里直接说话。",
+        "把组件地址、鉴权信息和全局开关配置好后，诊断命令就能立刻恢复。"
+      ].join("\n"),
+      "当前还没有可用的自定义 HTTP 组件"
+    );
   }
 
-  formatMemoryCleared(deletedCount: number): BotReplyMessage {
-    const card = buildCard({
-      title: "聊天记忆已清空",
-      template: "green",
-      elements: [
-        fieldGrid([
-          ["已清除条数", String(deletedCount)],
-          ["当前状态", "下次聊天将从空记忆开始"]
-        ]),
-        noteBlock([
-          "这只会清掉你自己的聊天记忆，不影响 SmartKit 诊断会话。"
-        ])
-      ]
-    });
-    return {
-      kind: "card",
-      card,
-      textPreview: `聊天记忆已清空 ${deletedCount} 条`
-    };
+  formatSmartKitUnavailable(): BotOutboundMessage {
+    return this.formatDiagnosticUnavailable();
   }
 
-  formatMemoryStatus(memoryCount: number): BotReplyMessage {
-    const card = buildCard({
-      title: "当前聊天记忆",
-      template: "wathet",
-      elements: [
-        fieldGrid([
-          ["记忆条数", String(memoryCount)],
-          ["作用范围", "仅你本人可见 / 独立管理"]
-        ]),
-        markdownBlock([
-          "**说明**",
-          "- 这些记忆只用于普通聊天模式",
-          "- 不会混入其他用户上下文",
-          "- 如需清空，请发送 `/chat-reset`"
-        ].join("\n"))
-      ]
-    });
-    return {
-      kind: "card",
-      card,
-      textPreview: `当前聊天记忆 ${memoryCount} 条`
-    };
+  formatDiagnosticComponentSelectionRequired(componentNames: string[]): BotOutboundMessage {
+    const visible = componentNames.filter(Boolean).slice(0, 6);
+    return textReply(
+      [
+        "当前命中了多个自定义 HTTP 组件，我还不能确定该走哪一个。",
+        visible.length > 0 ? `请在消息里带上组件名，例如：${visible.join(" / ")}。` : "请在消息里补充组件名称。",
+        "补上组件名后，我会按对应组件继续执行 trace / uid / job。"
+      ].join("\n"),
+      "需要先确认要使用哪个自定义 HTTP 组件"
+    );
   }
 
-  formatBridgeError(message: string): BotReplyMessage {
-    const card = buildCard({
-      title: "请求处理失败",
-      template: "red",
-      elements: [
-        markdownBlock(`**错误信息**\n${normalizeMultiline(message)}`),
-        divider(),
-        markdownBlock([
-          "**你可以这样排查**",
-          "- 先确认 SmartKit 服务是否可达",
-          "- 再确认 Bridge Token / 调用方配置是否正确",
-          "- 如仍失败，可先发 `/help` 看命令格式",
-          "- 如果只是想普通聊天，可改发 `/chat 你的问题`"
-        ].join("\n"))
-      ]
-    });
+  formatDiagnosticTargetRequired(input: {
+    component: DiagnosticComponentProfile;
+    reason: string;
+    expectedInputs: string[];
+  }): BotOutboundMessage {
+    const componentName = input.component.name || "自定义 HTTP 组件";
+    const hints = input.expectedInputs.length > 0 ? input.expectedInputs.join(" / ") : "trace_id / uid";
+    const lines = [
+      `${componentName} 还需要更多输入。`,
+      input.reason,
+      `请补一个 ${hints}。`,
+      "如果是链路问题，优先给 trace_id；如果是用户维度问题，给 uid + 时间范围会更准确。"
+    ];
+    if (input.component.summary || input.component.usageDescription) {
+      lines.push(`组件说明：${normalizeInline(input.component.summary || input.component.usageDescription, 220)}`);
+    }
+    if (input.component.examplePrompts.length > 0) {
+      lines.push(`示例：${normalizeInline(input.component.examplePrompts[0] || "", 220)}`);
+    }
+    return textReply(lines.join("\n"), `${componentName} 还需要 trace_id 或 uid`);
+  }
 
-    return {
-      kind: "card",
-      card,
-      textPreview: `请求失败：${normalizeInline(message)}`
-    };
+  formatCapabilityDenied(input: { capabilityID: CapabilityID; scope: "p2p" | "group"; reason: string }): BotOutboundMessage {
+    const capability = this.capabilityLabel(input.capabilityID);
+    const objectLabel = input.scope === "group" ? "当前群组" : "当前用户";
+    return textReply(
+      [
+        `${capability}未对当前对象开启。`,
+        `${objectLabel}现在还不能使用${capability}。`,
+        normalizeInline(input.reason, 220),
+        "去桌面控制台的“群组”或“用户”页直接打开对应能力的开关即可；配置会自动保存，下一条消息立即生效。"
+      ].join("\n"),
+      `${capability}未对当前对象开启`
+    );
+  }
+
+  formatMemoryCleared(deletedCount: number): BotOutboundMessage {
+    return textReply(
+      [
+        `聊天记忆已清空，共删除 ${deletedCount} 条。`,
+        "下次聊天将从空记忆开始。",
+        "这只会清掉你自己的聊天记忆，不影响诊断会话。以后也可以直接发送 /new。"
+      ].join("\n"),
+      `聊天记忆已清空 ${deletedCount} 条`
+    );
+  }
+
+  formatMemoryStatus(memoryCount: number): BotOutboundMessage {
+    return textReply(
+      [
+        `当前聊天记忆 ${memoryCount} 条。`,
+        "这些记忆只用于普通聊天模式。",
+        "不会混入其他用户上下文；如需清空，请发送 /new。"
+      ].join("\n"),
+      `当前聊天记忆 ${memoryCount} 条`
+    );
+  }
+
+  formatBridgeError(message: string): BotOutboundMessage {
+    return textReply(
+      [
+        `请求处理失败：${normalizeInline(message)}`,
+        "你可以先确认组件服务是否可达，再确认 Bridge Token / 调用方配置是否正确。",
+        "如仍失败，可先发 /help 看命令格式；如果只是想普通聊天，可改发 /chat 你的问题。"
+      ].join("\n"),
+      `请求失败：${normalizeInline(message)}`
+    );
   }
 
   private async renderReadableSummary(data: DiagnosisPayload, question: string): Promise<string> {
@@ -438,6 +437,15 @@ function buildCard(params: {
       }
     },
     elements: params.elements
+  };
+}
+
+function textReply(text: string, textPreview?: string): BotOutboundMessage {
+  const normalized = normalizeMultiline(text, 1400);
+  return {
+    kind: "text",
+    text: normalized,
+    textPreview: textPreview ? normalizeInline(textPreview, 180) : normalizeInline(normalized, 180)
   };
 }
 

@@ -19,13 +19,14 @@ afterEach(() => {
 });
 
 describe("loadConfig", () => {
-  it("treats feishu and smartkit config as optional at startup", () => {
+  it("treats feishu and diagnostic bridge config as optional at startup", () => {
     const home = makeTempDir();
     fs.writeFileSync(path.join(home, ".env"), "BOT_CHAT_ENABLED=true\n");
 
     const config = loadConfig({ FEISHU_BOT_HOME: home });
 
     expect(config.feishu.configured).toBe(false);
+    expect(config.diagnosticBridge.configured).toBe(false);
     expect(config.smartkit.configured).toBe(false);
     expect(config.botLlm.provider).toBe("stepfun");
     expect(config.botLlm.baseUrl).toBe("https://api.stepfun.com/v1");
@@ -42,7 +43,7 @@ describe("loadConfig", () => {
       [
         "FEISHU_APP_ID=cli_test",
         "FEISHU_APP_SECRET=secret_test",
-        "SMARTKIT_BASE_URL=https://smartkit.example.com",
+        "DIAGNOSTIC_HTTP_BASE_URL=https://diagnostics.example.com",
         "SESSION_DB_PATH=./data/runtime.sqlite",
         "BOT_CHAT_ENABLED=false",
         "BOT_CAPABILITY_WEB_SEARCH=true",
@@ -54,7 +55,7 @@ describe("loadConfig", () => {
 
     expect(config.feishu.appId).toBe("cli_test");
     expect(config.feishu.configured).toBe(true);
-    expect(config.smartkit.configured).toBe(true);
+    expect(config.diagnosticBridge.configured).toBe(true);
     expect(config.session.dbPath).toBe(path.join(home, "data", "runtime.sqlite"));
     expect(config.botChat.enabled).toBe(false);
     expect(config.capabilities.webSearchEnabled).toBe(true);
@@ -68,13 +69,13 @@ describe("loadConfig", () => {
       [
         "FEISHU_APP_ID=cli_base",
         "FEISHU_APP_SECRET=secret_base",
-        "SMARTKIT_BASE_URL=https://base.example.com"
+        "DIAGNOSTIC_HTTP_BASE_URL=https://base.example.com"
       ].join("\n")
     );
     fs.writeFileSync(
       path.join(home, ".env.production"),
       [
-        "SMARTKIT_BASE_URL=https://prod.example.com",
+        "DIAGNOSTIC_HTTP_BASE_URL=https://prod.example.com",
         "FEISHU_BOT_NAME=desktop-bot"
       ].join("\n")
     );
@@ -85,7 +86,24 @@ describe("loadConfig", () => {
     });
 
     expect(config.profile).toBe("production");
-    expect(config.smartkit.baseUrl).toBe("https://prod.example.com");
+    expect(config.diagnosticBridge.baseUrl).toBe("https://prod.example.com");
     expect(config.feishu.botName).toBe("desktop-bot");
+  });
+
+  it("keeps legacy SMARTKIT env names working as aliases", () => {
+    const home = makeTempDir();
+    fs.writeFileSync(
+      path.join(home, ".env"),
+      [
+        "SMARTKIT_BASE_URL=https://legacy.example.com",
+        "SMARTKIT_TOKEN=legacy-token"
+      ].join("\n")
+    );
+
+    const config = loadConfig({ FEISHU_BOT_HOME: home });
+
+    expect(config.diagnosticBridge.baseUrl).toBe("https://legacy.example.com");
+    expect(config.diagnosticBridge.token).toBe("legacy-token");
+    expect(config.smartkit.baseUrl).toBe("https://legacy.example.com");
   });
 });

@@ -12,6 +12,10 @@ export const MANAGED_ENV_KEYS = [
   "FEISHU_APP_ID",
   "FEISHU_APP_SECRET",
   "FEISHU_BOT_NAME",
+  "DIAGNOSTIC_HTTP_BASE_URL",
+  "DIAGNOSTIC_HTTP_TOKEN",
+  "DIAGNOSTIC_HTTP_CALLER",
+  "DIAGNOSTIC_HTTP_TIMEOUT_MS",
   "SMARTKIT_BASE_URL",
   "SMARTKIT_TOKEN",
   "SMARTKIT_CALLER",
@@ -46,6 +50,40 @@ function normalizeBoolean(value, fallback = false) {
     return fallback;
   }
   return normalized === "true";
+}
+
+function readFirstText(values, keys, fallback = "") {
+  for (const key of keys) {
+    const value = trim(values?.[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+export function resolveDiagnosticEnvValues(values = {}) {
+  return {
+    baseUrl: readFirstText(values, ["DIAGNOSTIC_HTTP_BASE_URL", "SMARTKIT_BASE_URL"]),
+    token: readFirstText(values, ["DIAGNOSTIC_HTTP_TOKEN", "SMARTKIT_TOKEN"]),
+    caller: readFirstText(values, ["DIAGNOSTIC_HTTP_CALLER", "SMARTKIT_CALLER"], "feishu-bot"),
+    timeoutMs: readFirstText(values, ["DIAGNOSTIC_HTTP_TIMEOUT_MS", "SMARTKIT_TIMEOUT_MS"], "20000")
+  };
+}
+
+export function normalizeDiagnosticEnvAliases(values = {}) {
+  const diagnostic = resolveDiagnosticEnvValues(values);
+  return {
+    ...values,
+    DIAGNOSTIC_HTTP_BASE_URL: diagnostic.baseUrl,
+    DIAGNOSTIC_HTTP_TOKEN: diagnostic.token,
+    DIAGNOSTIC_HTTP_CALLER: diagnostic.caller,
+    DIAGNOSTIC_HTTP_TIMEOUT_MS: diagnostic.timeoutMs,
+    SMARTKIT_BASE_URL: readFirstText(values, ["SMARTKIT_BASE_URL"], diagnostic.baseUrl),
+    SMARTKIT_TOKEN: readFirstText(values, ["SMARTKIT_TOKEN"], diagnostic.token),
+    SMARTKIT_CALLER: readFirstText(values, ["SMARTKIT_CALLER"], diagnostic.caller),
+    SMARTKIT_TIMEOUT_MS: readFirstText(values, ["SMARTKIT_TIMEOUT_MS"], diagnostic.timeoutMs)
+  };
 }
 
 export function getRuntimeHome() {
@@ -85,6 +123,10 @@ export function getDefaultEnvValues() {
     FEISHU_APP_ID: "",
     FEISHU_APP_SECRET: "",
     FEISHU_BOT_NAME: "feishu-bot",
+    DIAGNOSTIC_HTTP_BASE_URL: "",
+    DIAGNOSTIC_HTTP_TOKEN: "",
+    DIAGNOSTIC_HTTP_CALLER: "feishu-bot",
+    DIAGNOSTIC_HTTP_TIMEOUT_MS: "20000",
     SMARTKIT_BASE_URL: "",
     SMARTKIT_TOKEN: "",
     SMARTKIT_CALLER: "feishu-bot",
@@ -133,17 +175,24 @@ export function readEnvConfig() {
   if (fs.existsSync(fullPath)) {
     parsed = dotenv.parse(fs.readFileSync(fullPath));
   }
-  const values = applyProviderDefaults({
+  const values = normalizeDiagnosticEnvAliases(applyProviderDefaults({
     ...defaults,
     ...parsed
-  });
+  }));
+  const diagnostic = resolveDiagnosticEnvValues(values);
   return {
     ...values,
     FEISHU_APP_ID: trim(values.FEISHU_APP_ID),
     FEISHU_APP_SECRET: trim(values.FEISHU_APP_SECRET),
     FEISHU_BOT_NAME: trim(values.FEISHU_BOT_NAME) || defaults.FEISHU_BOT_NAME,
-    SMARTKIT_BASE_URL: trim(values.SMARTKIT_BASE_URL),
-    SMARTKIT_TOKEN: trim(values.SMARTKIT_TOKEN),
+    DIAGNOSTIC_HTTP_BASE_URL: diagnostic.baseUrl,
+    DIAGNOSTIC_HTTP_TOKEN: diagnostic.token,
+    DIAGNOSTIC_HTTP_CALLER: diagnostic.caller,
+    DIAGNOSTIC_HTTP_TIMEOUT_MS: diagnostic.timeoutMs,
+    SMARTKIT_BASE_URL: trim(values.SMARTKIT_BASE_URL) || diagnostic.baseUrl,
+    SMARTKIT_TOKEN: trim(values.SMARTKIT_TOKEN) || diagnostic.token,
+    SMARTKIT_CALLER: trim(values.SMARTKIT_CALLER) || diagnostic.caller,
+    SMARTKIT_TIMEOUT_MS: trim(values.SMARTKIT_TIMEOUT_MS) || diagnostic.timeoutMs,
     BOT_LLM_PROVIDER: trim(values.BOT_LLM_PROVIDER) || defaults.BOT_LLM_PROVIDER,
     BOT_LLM_API_KEY: trim(values.BOT_LLM_API_KEY),
     BOT_LLM_BASE_URL: trim(values.BOT_LLM_BASE_URL) || defaults.BOT_LLM_BASE_URL,
@@ -160,10 +209,11 @@ export function readEnvConfig() {
 
 export function buildEnvFileContent(input) {
   const defaults = getDefaultEnvValues();
-  const values = applyProviderDefaults({
+  const values = normalizeDiagnosticEnvAliases(applyProviderDefaults({
     ...defaults,
     ...input
-  });
+  }));
+  const diagnostic = resolveDiagnosticEnvValues(values);
   const lines = [
     `BOT_PROFILE=${trim(values.BOT_PROFILE) || defaults.BOT_PROFILE}`,
     "",
@@ -172,11 +222,11 @@ export function buildEnvFileContent(input) {
     `FEISHU_APP_SECRET=${trim(values.FEISHU_APP_SECRET)}`,
     `FEISHU_BOT_NAME=${trim(values.FEISHU_BOT_NAME) || defaults.FEISHU_BOT_NAME}`,
     "",
-    "# SmartKit bridge (optional; leave empty to use chat-only mode)",
-    `SMARTKIT_BASE_URL=${trim(values.SMARTKIT_BASE_URL)}`,
-    `SMARTKIT_TOKEN=${trim(values.SMARTKIT_TOKEN)}`,
-    `SMARTKIT_CALLER=${trim(values.SMARTKIT_CALLER) || defaults.SMARTKIT_CALLER}`,
-    `SMARTKIT_TIMEOUT_MS=${trim(values.SMARTKIT_TIMEOUT_MS) || defaults.SMARTKIT_TIMEOUT_MS}`,
+    "# Diagnostic bridge (preferred env names; legacy SMARTKIT_* aliases are still supported)",
+    `DIAGNOSTIC_HTTP_BASE_URL=${diagnostic.baseUrl}`,
+    `DIAGNOSTIC_HTTP_TOKEN=${diagnostic.token}`,
+    `DIAGNOSTIC_HTTP_CALLER=${diagnostic.caller || defaults.DIAGNOSTIC_HTTP_CALLER}`,
+    `DIAGNOSTIC_HTTP_TIMEOUT_MS=${diagnostic.timeoutMs || defaults.DIAGNOSTIC_HTTP_TIMEOUT_MS}`,
     "",
     "# Local session store",
     `SESSION_DB_PATH=${trim(values.SESSION_DB_PATH) || defaults.SESSION_DB_PATH}`,
@@ -223,11 +273,122 @@ function defaultRule() {
     note: "",
     capabilities: {
       chat: true,
-      smartkit: true,
-      webSearch: true,
-      voiceReply: true,
-      vision: true
+      diagnosticHttp: false,
+      customComponents: {},
+      webSearch: false,
+      voiceReply: false,
+      vision: false
     }
+  };
+}
+
+function normalizeStringArray(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values
+    .map((value) => trim(value))
+    .filter(Boolean);
+}
+
+function normalizeTimeout(value) {
+  const numeric = typeof value === "number" ? value : Number(trim(value));
+  return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : 20000;
+}
+
+function normalizeCommand(value) {
+  const raw = trim(value).replace(/^\//, "").toLowerCase();
+  return raw.replace(/[^a-z0-9_-]/g, "");
+}
+
+function sanitizeHelpCapabilityOrderMode(value) {
+  return trim(value) === "component_first" ? "component_first" : "builtin_first";
+}
+
+function sanitizeDiagnosticComponent(component, fallbackId = "legacy-diagnostic-http") {
+  const value = component && typeof component === "object" ? component : {};
+  const explicitId = trim(value?.id);
+  const normalized = {
+    id: explicitId || fallbackId,
+    name: trim(value?.name),
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : true,
+    command: normalizeCommand(value?.command),
+    summary: trim(value?.summary),
+    usageDescription: trim(value?.usageDescription),
+    examplePrompts: normalizeStringArray(value?.examplePrompts),
+    baseUrl: trim(value?.baseUrl).replace(/\/$/, ""),
+    token: trim(value?.token),
+    caller: trim(value?.caller) || "feishu-bot",
+    timeoutMs: normalizeTimeout(value?.timeoutMs)
+  };
+
+  const hasContent =
+    normalized.name ||
+    normalized.command ||
+    normalized.summary ||
+    normalized.usageDescription ||
+    normalized.examplePrompts.length ||
+    normalized.baseUrl;
+  return hasContent || explicitId ? normalized : null;
+}
+
+function sanitizeDiagnosticComponents(components) {
+  if (Array.isArray(components)) {
+    return components
+      .map((component, index) => sanitizeDiagnosticComponent(component, `component-${index + 1}`))
+      .filter(Boolean);
+  }
+  const single = sanitizeDiagnosticComponent(components, "legacy-diagnostic-http");
+  return single ? [single] : [];
+}
+
+function sanitizeHelpSettings(help) {
+  const value = help && typeof help === "object" ? help : {};
+  const normalized = {
+    title: trim(value?.title),
+    summary: trim(value?.summary),
+    newCommandDescription: trim(value?.newCommandDescription),
+    capabilityOrderMode: sanitizeHelpCapabilityOrderMode(value?.capabilityOrderMode),
+    examplePrompts: normalizeStringArray(value?.examplePrompts),
+    notes: normalizeStringArray(value?.notes)
+  };
+  const hasContent =
+    normalized.title ||
+    normalized.summary ||
+    normalized.newCommandDescription ||
+    normalized.capabilityOrderMode !== "builtin_first" ||
+    normalized.examplePrompts.length ||
+    normalized.notes.length;
+  return hasContent ? normalized : null;
+}
+
+function sanitizeCapabilityCardText(value) {
+  return {
+    helpDescription: trim(value?.helpDescription)
+  };
+}
+
+function sanitizeCapabilityCardSettings(cards) {
+  const value = cards && typeof cards === "object" ? cards : {};
+  return {
+    webSearch: sanitizeCapabilityCardText(value?.webSearch),
+    voiceReply: sanitizeCapabilityCardText(value?.voiceReply),
+    vision: sanitizeCapabilityCardText(value?.vision)
+  };
+}
+
+function sanitizeProcessingReactionSettings(reaction) {
+  const value = reaction && typeof reaction === "object" ? reaction : {};
+  return {
+    enabled: typeof value?.enabled === "boolean" ? value.enabled : true,
+    emoji: trim(value?.emoji) || "OnIt"
+  };
+}
+
+function sanitizeFeedbackSettings(feedback) {
+  const value = feedback && typeof feedback === "object" ? feedback : {};
+  return {
+    processingReaction: sanitizeProcessingReactionSettings(value?.processingReaction)
   };
 }
 
@@ -240,7 +401,14 @@ function sanitizeRule(rule) {
     note: trim(rule?.note),
     capabilities: {
       chat: Boolean(rule?.capabilities?.chat ?? base.capabilities.chat),
-      smartkit: Boolean(rule?.capabilities?.smartkit ?? base.capabilities.smartkit),
+      diagnosticHttp: Boolean(rule?.capabilities?.diagnosticHttp ?? rule?.capabilities?.smartkit ?? base.capabilities.diagnosticHttp),
+      customComponents: rule?.capabilities?.customComponents && typeof rule.capabilities.customComponents === "object"
+        ? Object.fromEntries(
+            Object.entries(rule.capabilities.customComponents)
+              .map(([key, value]) => [trim(key), Boolean(value)])
+              .filter(([key]) => Boolean(key))
+          )
+        : {},
       webSearch: Boolean(rule?.capabilities?.webSearch ?? base.capabilities.webSearch),
       voiceReply: Boolean(rule?.capabilities?.voiceReply ?? base.capabilities.voiceReply),
       vision: Boolean(rule?.capabilities?.vision ?? base.capabilities.vision)
@@ -256,9 +424,15 @@ export function getDefaultConsoleSettings() {
       groups: [],
       users: []
     },
+    components: {
+      diagnosticHttp: []
+    },
+    capabilityCards: sanitizeCapabilityCardSettings(null),
+    feedback: sanitizeFeedbackSettings(null),
+    help: null,
     ui: {
       onboardingCompleted: false,
-      lastVisitedSection: "abilities",
+      lastVisitedSection: "thread",
       feishuTestReceiveId: "",
       feishuTestReceiveIdType: "chat_id"
     }
@@ -267,7 +441,13 @@ export function getDefaultConsoleSettings() {
 
 export function readConsoleSettings() {
   const env = readEnvConfig();
-  const requiredReady = Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.BOT_LLM_API_KEY);
+  const requiredReady = Boolean(
+    env.FEISHU_APP_ID &&
+    env.FEISHU_APP_SECRET &&
+    env.BOT_LLM_API_KEY &&
+    env.BOT_LLM_BASE_URL &&
+    env.BOT_LLM_MODEL
+  );
   const defaults = {
     ...getDefaultConsoleSettings(),
     ui: {
@@ -282,7 +462,7 @@ export function readConsoleSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(fullPath, "utf8"));
     const rawUi = raw?.ui ?? null;
-    const lastVisitedSection = ["abilities", "groups", "users", "system"].includes(trim(rawUi?.lastVisitedSection))
+    const lastVisitedSection = ["thread", "abilities", "groups", "users", "system"].includes(trim(rawUi?.lastVisitedSection))
       ? trim(rawUi.lastVisitedSection)
       : defaults.ui.lastVisitedSection;
     const feishuTestReceiveIdType = ["chat_id", "open_id", "user_id"].includes(trim(rawUi?.feishuTestReceiveIdType))
@@ -298,6 +478,12 @@ export function readConsoleSettings() {
         groups: Array.isArray(raw?.permissions?.groups) ? raw.permissions.groups.map(sanitizeRule) : [],
         users: Array.isArray(raw?.permissions?.users) ? raw.permissions.users.map(sanitizeRule) : []
       },
+      components: {
+        diagnosticHttp: sanitizeDiagnosticComponents(raw?.components?.diagnosticHttp)
+      },
+      capabilityCards: sanitizeCapabilityCardSettings(raw?.capabilityCards),
+      feedback: sanitizeFeedbackSettings(raw?.feedback),
+      help: sanitizeHelpSettings(raw?.help),
       ui: {
         onboardingCompleted,
         lastVisitedSection,
@@ -322,11 +508,17 @@ export function writeConsoleSettings(settings) {
         ? settings.permissions.users.map(sanitizeRule).filter((rule) => rule.id || rule.name)
         : []
     },
+    components: {
+      diagnosticHttp: sanitizeDiagnosticComponents(settings?.components?.diagnosticHttp)
+    },
+    capabilityCards: sanitizeCapabilityCardSettings(settings?.capabilityCards),
+    feedback: sanitizeFeedbackSettings(settings?.feedback),
+    help: sanitizeHelpSettings(settings?.help),
     ui: {
       onboardingCompleted: Boolean(settings?.ui?.onboardingCompleted),
-      lastVisitedSection: ["abilities", "groups", "users", "system"].includes(trim(settings?.ui?.lastVisitedSection))
+      lastVisitedSection: ["thread", "abilities", "groups", "users", "system"].includes(trim(settings?.ui?.lastVisitedSection))
         ? trim(settings.ui.lastVisitedSection)
-        : "abilities",
+        : "thread",
       feishuTestReceiveId: trim(settings?.ui?.feishuTestReceiveId),
       feishuTestReceiveIdType: ["chat_id", "open_id", "user_id"].includes(trim(settings?.ui?.feishuTestReceiveIdType))
         ? trim(settings.ui.feishuTestReceiveIdType)
@@ -353,8 +545,14 @@ export function ensureDefaultRuntimeConfig() {
     writeConsoleSettings({
       ...getDefaultConsoleSettings(),
       ui: {
-        onboardingCompleted: Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.BOT_LLM_API_KEY),
-        lastVisitedSection: "abilities",
+        onboardingCompleted: Boolean(
+          env.FEISHU_APP_ID &&
+          env.FEISHU_APP_SECRET &&
+          env.BOT_LLM_API_KEY &&
+          env.BOT_LLM_BASE_URL &&
+          env.BOT_LLM_MODEL
+        ),
+        lastVisitedSection: "thread",
         feishuTestReceiveId: "",
         feishuTestReceiveIdType: "chat_id"
       }

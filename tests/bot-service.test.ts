@@ -1,6 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { BotService } from "../src/bot-service.js";
+import { StaticDiagnosticGatewayProvider } from "../src/diagnostic-components.js";
+import { ConsoleDiagnosticIntentRouter } from "../src/diagnostic-intent-router.js";
 import { BotFormatter } from "../src/formatter.js";
+import { ConsoleHelpContentProvider } from "../src/help-content.js";
 import { JobPoller } from "../src/job-poller.js";
 import { InMemoryMessenger } from "../src/adapter/feishu/message-client.js";
 import { SessionStore } from "../src/session-store.js";
@@ -8,6 +14,10 @@ import type {
   AcceptedPayload,
   BotChatService,
   BridgeEnvelope,
+  CapabilityAccessResult,
+  CapabilityContext,
+  CapabilityGate,
+  CapabilityID,
   DiagnosisPayload,
   FeishuReceiveMessageEvent,
   JobPayload,
@@ -16,6 +26,8 @@ import type {
 
 class FakeSmartKit implements SmartKitGateway {
   public followupCalls: string[] = [];
+  public traceCalls = 0;
+  public uidCalls = 0;
   private readonly diagnosis: DiagnosisPayload = {
     target_type: "trace",
     target_id: "trace-123",
@@ -31,10 +43,12 @@ class FakeSmartKit implements SmartKitGateway {
   };
 
   async analyzeTrace(): Promise<BridgeEnvelope<DiagnosisPayload | AcceptedPayload>> {
+    this.traceCalls += 1;
     return envelope("ok", this.diagnosis, 200);
   }
 
   async analyzeUid(): Promise<BridgeEnvelope<DiagnosisPayload | AcceptedPayload>> {
+    this.uidCalls += 1;
     return envelope("accepted", {
       target_type: "uid",
       target_id: "123456",
@@ -108,6 +122,21 @@ class FakeChatService implements BotChatService {
   }
 }
 
+class FakeCapabilityGate implements CapabilityGate {
+  constructor(private readonly states: Partial<Record<CapabilityID, boolean>>) {}
+
+  canUse(capabilityID: CapabilityID, _context: CapabilityContext): CapabilityAccessResult {
+    const allowed = capabilityID.startsWith("component:")
+      ? (this.states[capabilityID] ?? this.states.diagnosticHttp ?? true)
+      : (this.states[capabilityID] ?? true);
+    return {
+      allowed,
+      source: "user",
+      reason: allowed ? "已开启" : "当前对象尚未开启该能力。"
+    };
+  }
+}
+
 function envelope<T>(code: string, data: T, httpStatus: number): BridgeEnvelope<T> {
   return {
     code,
@@ -139,8 +168,12 @@ function buildEvent(text: string, overrides: Partial<FeishuReceiveMessageEvent> 
   };
 }
 
-function renderCardText(messenger: InMemoryMessenger, index: number): string {
-  return JSON.stringify(messenger.replies[index]?.reply.card);
+function renderReplyText(messenger: InMemoryMessenger, index: number): string {
+  const reply = messenger.replies[index]?.reply;
+  if (!reply) {
+    return "";
+  }
+  return reply.kind === "card" ? JSON.stringify(reply.card) : reply.text;
 }
 
 const formatter = new BotFormatter({
@@ -161,9 +194,10 @@ describe("BotService", () => {
 
     expect(messenger.replies).toHaveLength(1);
     expect(messenger.replies[0]?.reply.kind).toBe("card");
-    expect(renderCardText(messenger, 0)).toContain("Trace诊断结果");
-    expect(renderCardText(messenger, 0)).toContain("结论");
-    expect(renderCardText(messenger, 0)).toContain("证据摘录");
+    expect(renderReplyText(messenger, 0)).toContain("Trace诊断结果");
+    expect(renderReplyText(messenger, 0)).toContain("结论");
+    expect(renderReplyText(messenger, 0)).toContain("证据摘录");
+    expect(messenger.processingEvents.map((item) => item.type)).toEqual(["add", "remove"]);
     expect(store.listSessionsAwaitingJobResult()).toHaveLength(0);
     store.close();
   });
@@ -177,8 +211,246 @@ describe("BotService", () => {
     await service.handleEvent(buildEvent("帮我总结一下今天的工作"));
 
     expect(chatService.messages).toContain("user-1:帮我总结一下今天的工作");
-    expect(renderCardText(messenger, 0)).toContain("轻量对话助手");
-    expect(renderCardText(messenger, 0)).toContain("我记住了");
+    expect(messenger.replies[0]?.reply.kind).toBe("text");
+    expect(renderReplyText(messenger, 0)).toContain("我记住了");
+    expect(store.getSessionByAlias("p2p:chat-1:user-1")).toMatchObject({
+      conversationId: "local:p2p:chat-1:user-1",
+      lastQuestion: "帮我总结一下今天的工作",
+      scope: "p2p"
+    });
+    store.close();
+  });
+
+  it("persists help requests into the local thread store", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const service = new BotService(store, new FakeSmartKit(), new FakeChatService(), messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/help"));
+
+    expect(renderReplyText(messenger, 0)).toContain("Feishu 诊断助手");
+    expect(store.getSessionByAlias("p2p:chat-1:user-1")).toMatchObject({
+      conversationId: "local:p2p:chat-1:user-1",
+      lastQuestion: "/help",
+      scope: "p2p"
+    });
+    store.close();
+  });
+
+  it("uses configured help content when replying to /help", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-help-"));
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {},
+        feedback: {
+          processingReaction: {
+            enabled: true,
+            emoji: "OnIt"
+          }
+        },
+        help: {
+          title: "订单助手帮助",
+          summary: "这里优先说明订单排障和聊天入口。",
+          newCommandDescription: "开始新话题并清空聊天上下文。",
+          capabilityOrderMode: "builtin_first",
+          examplePrompts: ["/trace trace-123456", "订单诊断帮我看 123456 最近 1h"],
+          notes: ["私聊没命中命令时会自动进入聊天模式。"]
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const formatterWithHelp = new BotFormatter({
+        enabled: false,
+        apiKey: "",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        timeoutMs: 1000
+      }, new ConsoleHelpContentProvider(process.env));
+      const service = new BotService(store, new FakeSmartKit(), new FakeChatService(), messenger, formatterWithHelp, "smartkit-bot");
+
+      await service.handleEvent(buildEvent("/help"));
+
+      expect(renderReplyText(messenger, 0)).toContain("订单助手帮助");
+      expect(renderReplyText(messenger, 0)).toContain("订单排障和聊天入口");
+      expect(renderReplyText(messenger, 0)).toContain("/new");
+      expect(renderReplyText(messenger, 0)).toContain("开始新话题并清空聊天上下文");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("uses configured built-in ability descriptions in /help", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-ability-help-"));
+    fs.writeFileSync(
+      path.join(tempHome, ".env"),
+      [
+        "BOT_LLM_API_KEY=test-key",
+        "BOT_LLM_BASE_URL=https://api.example.com/v1",
+        "BOT_LLM_MODEL=test-model",
+        "BRAVE_SEARCH_API_KEY=brave-key",
+        "BOT_CAPABILITY_WEB_SEARCH=true"
+      ].join("\n"),
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {},
+        capabilityCards: {
+          webSearch: {
+            helpDescription: "可以联网搜索公开资料后再给出整理结果。"
+          }
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const service = new BotService(store, new FakeSmartKit(), new FakeChatService(), messenger, formatter, "smartkit-bot");
+
+      await service.handleEvent(buildEvent("/help"));
+
+      expect(renderReplyText(messenger, 0)).toContain("联网搜索");
+      expect(renderReplyText(messenger, 0)).toContain("可以联网搜索公开资料后再给出整理结果");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("includes valid component shortcut commands in /help", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const orders = new FakeSmartKit();
+    const provider = new StaticDiagnosticGatewayProvider(
+      [
+        {
+          id: "orders",
+          name: "订单诊断",
+          command: "orders",
+          enabled: true,
+          summary: "排查订单失败和履约异常。",
+          usageDescription: "",
+          examplePrompts: [],
+          baseUrl: "https://orders.example.com",
+          token: "",
+          caller: "feishu-bot",
+          timeoutMs: 20000
+        }
+      ],
+      new Map([["orders", orders]])
+    );
+    const router = new ConsoleDiagnosticIntentRouter(process.env);
+    const service = new BotService(store, provider, new FakeChatService(), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+    await service.handleEvent(buildEvent("/help"));
+
+    expect(renderReplyText(messenger, 0)).toContain("/orders");
+    expect(renderReplyText(messenger, 0)).toContain("订单诊断");
+    store.close();
+  });
+
+  it("supports rendering component help before built-in abilities", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-help-order-"));
+    fs.writeFileSync(
+      path.join(tempHome, ".env"),
+      [
+        "BOT_LLM_API_KEY=test-key",
+        "BOT_LLM_BASE_URL=https://api.example.com/v1",
+        "BOT_LLM_MODEL=test-model",
+        "BRAVE_SEARCH_API_KEY=brave-key",
+        "BOT_CAPABILITY_WEB_SEARCH=true"
+      ].join("\n"),
+      "utf8"
+    );
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {},
+        capabilityCards: {
+          webSearch: {
+            helpDescription: "可以联网搜索公开资料后再给出整理结果。"
+          }
+        },
+        help: {
+          capabilityOrderMode: "component_first"
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const orders = new FakeSmartKit();
+      const provider = new StaticDiagnosticGatewayProvider(
+        [
+          {
+            id: "orders",
+            name: "订单诊断",
+            command: "orders",
+            enabled: true,
+            summary: "排查订单失败和履约异常。",
+            usageDescription: "",
+            examplePrompts: [],
+            baseUrl: "https://orders.example.com",
+            token: "",
+            caller: "feishu-bot",
+            timeoutMs: 20000
+          }
+        ],
+        new Map([["orders", orders]])
+      );
+      const router = new ConsoleDiagnosticIntentRouter(process.env);
+      const service = new BotService(store, provider, new FakeChatService(false), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+      await service.handleEvent(buildEvent("/help"));
+
+      const rendered = renderReplyText(messenger, 0);
+      expect(rendered).toContain("订单诊断");
+      expect(rendered).toContain("联网搜索");
+      expect(rendered.indexOf("订单诊断")).toBeLessThan(rendered.indexOf("联网搜索"));
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("skips processing reactions when feedback is disabled", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger({ processingReactionEnabled: false });
+    const service = new BotService(store, new FakeSmartKit(), new FakeChatService(), messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/help"));
+
+    expect(messenger.processingEvents).toEqual([]);
+    expect(messenger.replies).toHaveLength(1);
     store.close();
   });
 
@@ -189,8 +461,30 @@ describe("BotService", () => {
 
     await service.handleEvent(buildEvent("/trace trace-123"));
 
-    expect(renderCardText(messenger, 0)).toContain("SmartKit 诊断尚未接入");
-    expect(renderCardText(messenger, 0)).toContain("普通机器人");
+    expect(renderReplyText(messenger, 0)).toContain("当前还没有可用的自定义 HTTP 组件");
+    expect(renderReplyText(messenger, 0)).toContain("普通机器人");
+    store.close();
+  });
+
+  it("blocks smartkit commands when the current object is not authorized", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const smartkit = new FakeSmartKit();
+    const service = new BotService(
+      store,
+      smartkit,
+      new FakeChatService(),
+      messenger,
+      formatter,
+      "smartkit-bot",
+      undefined,
+      new FakeCapabilityGate({ diagnosticHttp: false })
+    );
+
+    await service.handleEvent(buildEvent("/trace trace-123"));
+
+    expect(smartkit.traceCalls).toBe(0);
+    expect(renderReplyText(messenger, 0)).toContain("自定义 HTTP 组件未对当前对象开启");
     store.close();
   });
 
@@ -202,11 +496,33 @@ describe("BotService", () => {
 
     await service.handleEvent(buildEvent("/chat 你好"));
     await service.handleEvent(buildEvent("/memory"));
-    await service.handleEvent(buildEvent("/chat-reset"));
+    await service.handleEvent(buildEvent("/new"));
 
-    expect(renderCardText(messenger, 1)).toContain("当前聊天记忆");
-    expect(renderCardText(messenger, 2)).toContain("聊天记忆已清空");
+    expect(renderReplyText(messenger, 1)).toContain("当前聊天记忆");
+    expect(renderReplyText(messenger, 2)).toContain("聊天记忆已清空");
     expect(chatService.getMemoryCount("user-1")).toBe(0);
+    store.close();
+  });
+
+  it("blocks chat commands when the current object is not authorized", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const chatService = new FakeChatService();
+    const service = new BotService(
+      store,
+      new FakeSmartKit(),
+      chatService,
+      messenger,
+      formatter,
+      "smartkit-bot",
+      undefined,
+      new FakeCapabilityGate({ chat: false })
+    );
+
+    await service.handleEvent(buildEvent("/chat 你好"));
+
+    expect(chatService.messages).toHaveLength(0);
+    expect(renderReplyText(messenger, 0)).toContain("普通聊天未对当前对象开启");
     store.close();
   });
 
@@ -241,7 +557,7 @@ describe("BotService", () => {
     await service.handleEvent(buildEvent("展开原因"));
 
     expect(smartkit.followupCalls).toContain("conv-1:展开原因");
-    expect(renderCardText(messenger, 1)).toContain("已展开原因");
+    expect(renderReplyText(messenger, 1)).toContain("已展开原因");
     store.close();
   });
 
@@ -253,13 +569,341 @@ describe("BotService", () => {
 
     await service.handleEvent(buildEvent("/uid 123456 1h"));
 
-    const poller = new JobPoller(store, smartkit, messenger, formatter, 1000);
+    const poller = new JobPoller(store, smartkit, messenger, formatter, 1000, "smartkit-bot");
     await poller.tick();
 
     expect(messenger.replies).toHaveLength(2);
-    expect(renderCardText(messenger, 0)).toContain("后台诊断已提交");
-    expect(renderCardText(messenger, 1)).toContain("任务结果诊断结果");
+    expect(renderReplyText(messenger, 0)).toContain("后台诊断已提交");
+    expect(renderReplyText(messenger, 1)).toContain("任务结果诊断结果");
     expect(store.listSessionsAwaitingJobResult()).toHaveLength(0);
+    store.close();
+  });
+
+  it("skips async completion pushes after a capability is turned off", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const smartkit = new FakeSmartKit();
+    const service = new BotService(store, smartkit, new FakeChatService(), messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/uid 123456 1h"));
+
+    const poller = new JobPoller(
+      store,
+      smartkit,
+      messenger,
+      formatter,
+      1000,
+      "smartkit-bot",
+      new FakeCapabilityGate({ diagnosticHttp: false })
+    );
+    await poller.tick();
+
+    expect(messenger.replies).toHaveLength(1);
+    expect(renderReplyText(messenger, 0)).toContain("后台诊断已提交");
+    expect(store.listSessionsAwaitingJobResult()).toHaveLength(0);
+    store.close();
+  });
+
+  it("routes metadata-matched private chat to the diagnostic component", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-intent-"));
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {
+          diagnosticHttp: {
+            name: "订单诊断",
+            command: "orders",
+            summary: "用于订单失败与支付超时排查",
+            usageDescription: "当用户提到订单失败、支付超时时，优先尝试 uid 或 trace 排查。",
+            examplePrompts: ["订单诊断帮我看 123456 最近 1h 的失败原因"]
+          }
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const smartkit = new FakeSmartKit();
+      const router = new ConsoleDiagnosticIntentRouter(process.env);
+      const service = new BotService(store, smartkit, new FakeChatService(), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+      await service.handleEvent(buildEvent("订单诊断帮我看 123456 最近1h 的失败原因"));
+
+      expect(smartkit.uidCalls).toBe(1);
+      expect(renderReplyText(messenger, 0)).toContain("UID 后台诊断已提交");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("routes an explicit component shortcut command to the selected component", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-component-command-"));
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {
+          diagnosticHttp: {
+            id: "orders",
+            name: "订单诊断",
+            command: "orders",
+            summary: "用于订单失败与支付超时排查",
+            usageDescription: "当用户提到订单失败、支付超时时，优先尝试 uid 或 trace 排查。",
+            examplePrompts: ["订单诊断帮我看 uid 123456 最近 1h 的失败原因"],
+            baseUrl: "https://orders.example.com",
+            token: "",
+            caller: "feishu-bot",
+            timeoutMs: 20000
+          }
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const smartkit = new FakeSmartKit();
+      const provider = new StaticDiagnosticGatewayProvider(
+        new ConsoleDiagnosticIntentRouter(process.env).getComponents(),
+        new Map([["orders", smartkit]])
+      );
+      const router = new ConsoleDiagnosticIntentRouter(process.env);
+      const service = new BotService(store, provider, new FakeChatService(), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+      await service.handleEvent(buildEvent("/orders uid 123456 1h"));
+
+      expect(smartkit.uidCalls).toBe(1);
+      expect(renderReplyText(messenger, 0)).toContain("UID 后台诊断已提交");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("asks for trace or uid when metadata matched but target is missing", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-intent-"));
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {
+          diagnosticHttp: {
+            name: "订单诊断",
+            command: "orders",
+            summary: "用于订单失败与支付超时排查",
+            usageDescription: "当用户提到订单失败、支付超时时，应该走这个接口。",
+            examplePrompts: ["订单诊断帮我看 trace 7f8e9a0b1234"]
+          }
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const smartkit = new FakeSmartKit();
+      const router = new ConsoleDiagnosticIntentRouter(process.env);
+      const service = new BotService(store, smartkit, new FakeChatService(), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+      await service.handleEvent(buildEvent("订单诊断帮我看看订单失败原因"));
+
+      expect(smartkit.traceCalls).toBe(0);
+      expect(smartkit.uidCalls).toBe(0);
+      expect(renderReplyText(messenger, 0)).toContain("订单诊断 还需要更多输入");
+      expect(renderReplyText(messenger, 0)).toContain("trace_id");
+      expect(renderReplyText(messenger, 0)).toContain("uid");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("routes to the best matching component when multiple custom components exist", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-intent-multi-"));
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {
+          diagnosticHttp: [
+            {
+              id: "orders",
+              name: "订单诊断",
+              command: "orders",
+              summary: "用于订单失败排查",
+              usageDescription: "当用户提到订单失败、履约异常时，优先走这个接口。",
+              examplePrompts: ["订单诊断帮我看 123456 最近 1h 的失败原因"],
+              baseUrl: "https://orders.example.com",
+              token: "",
+              caller: "feishu-bot",
+              timeoutMs: 20000
+            },
+            {
+              id: "payments",
+              name: "支付诊断",
+              command: "payments",
+              summary: "用于支付失败和扣款超时排查",
+              usageDescription: "当用户提到支付失败、扣款超时、退款异常时，应该走这个接口。",
+              examplePrompts: ["支付诊断帮我看 uid 123456 最近 1h 的失败原因"],
+              baseUrl: "https://payments.example.com",
+              token: "",
+              caller: "feishu-bot",
+              timeoutMs: 20000
+            }
+          ]
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const orders = new FakeSmartKit();
+      const payments = new FakeSmartKit();
+      const provider = new StaticDiagnosticGatewayProvider(
+        new ConsoleDiagnosticIntentRouter(process.env).getComponents(),
+        new Map([
+          ["orders", orders],
+          ["payments", payments]
+        ])
+      );
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const router = new ConsoleDiagnosticIntentRouter(process.env);
+      const service = new BotService(store, provider, new FakeChatService(), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+      await service.handleEvent(buildEvent("支付诊断帮我看 123456 最近1h 的失败原因"));
+
+      expect(orders.uidCalls).toBe(0);
+      expect(payments.uidCalls).toBe(1);
+      expect(renderReplyText(messenger, 0)).toContain("UID 后台诊断已提交");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("asks the user to specify the component when multiple components are available", async () => {
+    const orders = new FakeSmartKit();
+    const payments = new FakeSmartKit();
+    const provider = new StaticDiagnosticGatewayProvider(
+      [
+        {
+          id: "orders",
+          name: "订单诊断",
+          command: "",
+          summary: "",
+          usageDescription: "",
+          examplePrompts: [],
+          baseUrl: "https://orders.example.com",
+          token: "",
+          caller: "feishu-bot",
+          timeoutMs: 20000
+        },
+        {
+          id: "payments",
+          name: "支付诊断",
+          command: "",
+          summary: "",
+          usageDescription: "",
+          examplePrompts: [],
+          baseUrl: "https://payments.example.com",
+          token: "",
+          caller: "feishu-bot",
+          timeoutMs: 20000
+        }
+      ],
+      new Map([
+        ["orders", orders],
+        ["payments", payments]
+      ])
+    );
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const service = new BotService(store, provider, new FakeChatService(), messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/trace trace-123"));
+
+    expect(orders.traceCalls).toBe(0);
+    expect(payments.traceCalls).toBe(0);
+    expect(renderReplyText(messenger, 0)).toContain("多个自定义 HTTP 组件");
+    expect(renderReplyText(messenger, 0)).toContain("订单诊断");
+    expect(renderReplyText(messenger, 0)).toContain("支付诊断");
+    store.close();
+  });
+
+  it("ignores duplicated component shortcut commands and falls back to help", async () => {
+    const orders = new FakeSmartKit();
+    const payments = new FakeSmartKit();
+    const provider = new StaticDiagnosticGatewayProvider(
+      [
+        {
+          id: "orders",
+          name: "订单诊断",
+          command: "orders",
+          enabled: true,
+          summary: "",
+          usageDescription: "",
+          examplePrompts: [],
+          baseUrl: "https://orders.example.com",
+          token: "",
+          caller: "feishu-bot",
+          timeoutMs: 20000
+        },
+        {
+          id: "payments",
+          name: "支付诊断",
+          command: "orders",
+          enabled: true,
+          summary: "",
+          usageDescription: "",
+          examplePrompts: [],
+          baseUrl: "https://payments.example.com",
+          token: "",
+          caller: "feishu-bot",
+          timeoutMs: 20000
+        }
+      ],
+      new Map([
+        ["orders", orders],
+        ["payments", payments]
+      ])
+    );
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const router = new ConsoleDiagnosticIntentRouter(process.env);
+    const service = new BotService(store, provider, new FakeChatService(), messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+    await service.handleEvent(buildEvent("/orders uid 123456 1h"));
+
+    expect(orders.uidCalls).toBe(0);
+    expect(payments.uidCalls).toBe(0);
+    expect(renderReplyText(messenger, 0)).toContain("Feishu 诊断助手");
     store.close();
   });
 });

@@ -106,6 +106,37 @@ actor BridgeClient {
     )
   }
 
+  func testFeishuConnectivity() throws -> ConnectivityTestResult {
+    try performSync(command: "test-feishu-connectivity", payload: Optional<SavePayload>.none)
+  }
+
+  func testModelConnectivity() throws -> ConnectivityTestResult {
+    try performSync(command: "test-model-connectivity", payload: Optional<SavePayload>.none)
+  }
+
+  func polishCopy(env: [String: String], text: String, purpose: String) throws -> PolishCopyResult {
+    try performSync(command: "polish-copy", payload: PolishCopyPayload(env: env, text: text, purpose: purpose))
+  }
+
+  func importDiagnosticComponentConfig(text: String) throws -> DiagnosticComponentImportResult {
+    try performSync(command: "import-diagnostic-component-config", payload: DiagnosticComponentImportPayload(text: text))
+  }
+
+  func testDiagnosticComponentConnectivity(component: DiagnosticHttpComponentConfig) throws -> ConnectivityTestResult {
+    try performSync(command: "test-diagnostic-component-connectivity", payload: DiagnosticComponentConnectivityPayload(component: component))
+  }
+
+  func listRecentThreads() throws -> [RecentThread] {
+    try performSync(command: "list-recent-threads", payload: Optional<SavePayload>.none)
+  }
+
+  func listThreadMessages(sessionID: String, limit: Int = 200) throws -> [ThreadMessage] {
+    try performSync(
+      command: "list-thread-messages",
+      payload: ThreadMessagesPayload(sessionId: sessionID, limit: limit)
+    )
+  }
+
   private func performSync<Payload: Encodable, Result: Decodable>(command: String, payload: Payload?) throws -> Result {
     let process = Process()
     process.executableURL = runtimePaths.executableURL
@@ -129,7 +160,7 @@ actor BridgeClient {
 
     if process.terminationStatus != 0 {
       if
-        let failed = try? JSONDecoder().decode(FailureEnvelope.self, from: errorData),
+        let failed = try? JSONDecoder().decode(FailureEnvelope.self, from: extractJSONEnvelope(from: errorData)),
         let message = failed.error
       {
         throw BridgeClientError.processFailure(message)
@@ -138,11 +169,21 @@ actor BridgeClient {
       throw BridgeClientError.processFailure(fallback.isEmpty ? "bridge 进程执行失败。" : fallback)
     }
 
-    let envelope = try JSONDecoder().decode(BridgeEnvelope<Result>.self, from: outputData)
+    let envelope = try JSONDecoder().decode(BridgeEnvelope<Result>.self, from: extractJSONEnvelope(from: outputData))
     guard envelope.ok, let result = envelope.result else {
       throw BridgeClientError.processFailure(envelope.error ?? BridgeClientError.invalidResponse.localizedDescription)
     }
     return result
+  }
+
+  private func extractJSONEnvelope(from data: Data) -> Data {
+    guard let raw = String(data: data, encoding: .utf8) else {
+      return data
+    }
+    guard let start = raw.firstIndex(of: "{") else {
+      return data
+    }
+    return Data(raw[start...].utf8)
   }
 }
 
@@ -152,6 +193,11 @@ struct OpenPathResponse: Decodable {
 
 struct StopResponse: Decodable {
   var stopped: Bool
+}
+
+struct ThreadMessagesPayload: Encodable {
+  var sessionId: String
+  var limit: Int
 }
 
 private struct CommandEnvelope<Payload: Encodable>: Encodable {

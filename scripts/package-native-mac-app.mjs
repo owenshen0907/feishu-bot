@@ -20,6 +20,21 @@ const backendRoot = path.join(resourcesRoot, "backend");
 const backendDeployRoot = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-backend-deploy-"));
 const dmgStagingRoot = path.join(stagingRoot, "dmg-staging");
 const dmgPath = path.join(stagingRoot, `${appName}.dmg`);
+const iconFileName = "AppIcon.icns";
+const appIconSource = path.join(repoRoot, "assets", "macos", iconFileName);
+
+function formatArtifactTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate())
+  ].join("") + "-" + [
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds())
+  ].join("");
+}
 
 function ensureEmptyDir(fullPath) {
   fs.rmSync(fullPath, { recursive: true, force: true });
@@ -49,9 +64,11 @@ function writeInfoPlist() {
   <key>CFBundleExecutable</key>
   <string>${executableName}</string>
   <key>CFBundleIdentifier</key>
-  <string>com.smartkit.feishubot.native</string>
+  <string>com.feishubot.native</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleName</key>
   <string>${appName}</string>
   <key>CFBundlePackageType</key>
@@ -110,7 +127,7 @@ function bundleResources() {
   fs.mkdirSync(macOSRoot, { recursive: true });
   fs.mkdirSync(resourcesRoot, { recursive: true });
   fs.mkdirSync(path.join(resourcesRoot, "bin"), { recursive: true });
-  fs.mkdirSync(path.join(backendRoot, "electron"), { recursive: true });
+  fs.mkdirSync(path.join(backendRoot, "desktop"), { recursive: true });
 
   copyTree(swiftBinary, path.join(macOSRoot, executableName));
   fs.chmodSync(path.join(macOSRoot, executableName), 0o755);
@@ -128,9 +145,16 @@ function bundleResources() {
   copyTree(path.join(backendDeployRoot, "node_modules"), path.join(backendRoot, "node_modules"), {
     verbatimSymlinks: true
   });
-  copyTree(path.join(repoRoot, "electron", "bridge-core.mjs"), path.join(backendRoot, "electron", "bridge-core.mjs"));
-  copyTree(path.join(repoRoot, "electron", "runtime-config.mjs"), path.join(backendRoot, "electron", "runtime-config.mjs"));
+  for (const entry of fs.readdirSync(path.join(repoRoot, "desktop"))) {
+    if (!entry.endsWith(".mjs")) {
+      continue;
+    }
+    copyTree(path.join(repoRoot, "desktop", entry), path.join(backendRoot, "desktop", entry));
+  }
   copyTree(path.join(repoRoot, "package.json"), path.join(backendRoot, "package.json"));
+  if (fs.existsSync(appIconSource)) {
+    copyTree(appIconSource, path.join(resourcesRoot, iconFileName));
+  }
 
   writeInfoPlist();
 }
@@ -163,17 +187,53 @@ function buildDmg() {
 }
 
 function publishArtifacts() {
-  ensureEmptyDir(nativeOutputRoot);
-  copyTree(appBundleRoot, path.join(nativeOutputRoot, `${appName}.app`), {
-    verbatimSymlinks: true
-  });
-  copyTree(dmgPath, path.join(nativeOutputRoot, `${appName}.dmg`));
+  fs.mkdirSync(nativeOutputRoot, { recursive: true });
+
+  const timestamp = formatArtifactTimestamp();
+  const timestampedAppPath = path.join(nativeOutputRoot, `${appName}-${timestamp}.app`);
+  const timestampedDmgPath = path.join(nativeOutputRoot, `${appName}-${timestamp}.dmg`);
+  const canonicalAppPath = path.join(nativeOutputRoot, `${appName}.app`);
+  const canonicalDmgPath = path.join(nativeOutputRoot, `${appName}.dmg`);
+
+  fs.rmSync(timestampedAppPath, { recursive: true, force: true });
+  runOrThrow("ditto", [appBundleRoot, timestampedAppPath]);
+  fs.copyFileSync(dmgPath, timestampedDmgPath);
+
+  let canonicalAppPublished = false;
+  try {
+    fs.rmSync(canonicalAppPath, { recursive: true, force: true });
+    runOrThrow("ditto", [appBundleRoot, canonicalAppPath]);
+    canonicalAppPublished = true;
+  } catch (error) {
+    console.warn(`warning: unable to overwrite ${canonicalAppPath}; keeping timestamped app instead (${error instanceof Error ? error.message : String(error)})`);
+  }
+
+  let canonicalDmgPublished = false;
+  try {
+    fs.copyFileSync(dmgPath, canonicalDmgPath);
+    canonicalDmgPublished = true;
+  } catch (error) {
+    console.warn(`warning: unable to overwrite ${canonicalDmgPath}; keeping timestamped dmg instead (${error instanceof Error ? error.message : String(error)})`);
+  }
+
+  return {
+    timestampedAppPath,
+    timestampedDmgPath,
+    canonicalAppPath: canonicalAppPublished ? canonicalAppPath : null,
+    canonicalDmgPath: canonicalDmgPublished ? canonicalDmgPath : null
+  };
 }
 
 bundleResources();
 buildDmg();
-publishArtifacts();
+const publishedArtifacts = publishArtifacts();
 fs.rmSync(backendDeployRoot, { recursive: true, force: true });
 
-console.log(`native macOS app bundle created at ${path.join(nativeOutputRoot, `${appName}.app`)}`);
-console.log(`native macOS dmg created at ${path.join(nativeOutputRoot, `${appName}.dmg`)}`);
+if (publishedArtifacts.canonicalAppPath) {
+  console.log(`native macOS app bundle created at ${publishedArtifacts.canonicalAppPath}`);
+}
+if (publishedArtifacts.canonicalDmgPath) {
+  console.log(`native macOS dmg created at ${publishedArtifacts.canonicalDmgPath}`);
+}
+console.log(`timestamped native macOS app bundle created at ${publishedArtifacts.timestampedAppPath}`);
+console.log(`timestamped native macOS dmg created at ${publishedArtifacts.timestampedDmgPath}`);

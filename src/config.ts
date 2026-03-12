@@ -34,6 +34,38 @@ function loadEnvProfile(env: NodeJS.ProcessEnv = process.env): string {
   return profile;
 }
 
+function readFirstText(env: NodeJS.ProcessEnv, keys: string[], fallback = ""): string {
+  for (const key of keys) {
+    const value = env[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return fallback;
+}
+
+function normalizeDiagnosticEnvAliases(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const baseUrl = readFirstText(env, ["DIAGNOSTIC_HTTP_BASE_URL", "SMARTKIT_BASE_URL"]);
+  const token = readFirstText(env, ["DIAGNOSTIC_HTTP_TOKEN", "SMARTKIT_TOKEN"]);
+  const caller = readFirstText(env, ["DIAGNOSTIC_HTTP_CALLER", "SMARTKIT_CALLER"], "feishu-bot");
+  const timeoutMs = readFirstText(env, ["DIAGNOSTIC_HTTP_TIMEOUT_MS", "SMARTKIT_TIMEOUT_MS"], "20000");
+  const defaultScope = readFirstText(env, ["DIAGNOSTIC_HTTP_DEFAULT_SCOPE", "SMARTKIT_DEFAULT_SCOPE"], "p2p");
+
+  return {
+    ...env,
+    DIAGNOSTIC_HTTP_BASE_URL: baseUrl,
+    DIAGNOSTIC_HTTP_TOKEN: token,
+    DIAGNOSTIC_HTTP_CALLER: caller,
+    DIAGNOSTIC_HTTP_TIMEOUT_MS: timeoutMs,
+    DIAGNOSTIC_HTTP_DEFAULT_SCOPE: defaultScope,
+    SMARTKIT_BASE_URL: readFirstText(env, ["SMARTKIT_BASE_URL"], baseUrl),
+    SMARTKIT_TOKEN: readFirstText(env, ["SMARTKIT_TOKEN"], token),
+    SMARTKIT_CALLER: readFirstText(env, ["SMARTKIT_CALLER"], caller),
+    SMARTKIT_TIMEOUT_MS: readFirstText(env, ["SMARTKIT_TIMEOUT_MS"], timeoutMs),
+    SMARTKIT_DEFAULT_SCOPE: readFirstText(env, ["SMARTKIT_DEFAULT_SCOPE"], defaultScope)
+  };
+}
+
 function normalizeOptionalText(value: string): string {
   return value.trim();
 }
@@ -44,7 +76,7 @@ function isConfigured(...values: string[]): boolean {
 
 const defaultChatSystemPrompt = [
   "你是一个部署在飞书里的内部助手。",
-  "当用户不是在查 SmartKit 诊断结果时，你可以直接陪他聊天、答疑、做简短分析和整理思路。",
+  "当用户不是在查询某个自定义组件的结果时，你可以直接陪他聊天、答疑、做简短分析和整理思路。",
   "你要记住同一个用户最近几轮对话上下文，但不要编造公司内部事实。",
   "输出中文，简洁、自然、可直接发在飞书卡片里。",
   "如果用户的问题涉及你拿不到的实时内部数据，明确说明你当前只能基于聊天内容回答。"
@@ -64,12 +96,12 @@ function buildSchema(defaultProfile: string) {
     BOT_PROFILE: z.string().default(defaultProfile),
     FEISHU_APP_ID: z.string().default(""),
     FEISHU_APP_SECRET: z.string().default(""),
-    FEISHU_BOT_NAME: z.string().default("smartkit-bot"),
-    SMARTKIT_BASE_URL: z.string().default(""),
-    SMARTKIT_TOKEN: z.string().default(""),
-    SMARTKIT_CALLER: z.string().default("feishu-bot"),
-    SMARTKIT_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
-    SMARTKIT_DEFAULT_SCOPE: z.enum(["p2p", "group"] as const).default("p2p"),
+    FEISHU_BOT_NAME: z.string().default("feishu-bot"),
+    DIAGNOSTIC_HTTP_BASE_URL: z.string().default(""),
+    DIAGNOSTIC_HTTP_TOKEN: z.string().default(""),
+    DIAGNOSTIC_HTTP_CALLER: z.string().default("feishu-bot"),
+    DIAGNOSTIC_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
+    DIAGNOSTIC_HTTP_DEFAULT_SCOPE: z.enum(["p2p", "group"] as const).default("p2p"),
     SESSION_DB_PATH: z.string().default("./data/feishu-bot.sqlite"),
     JOB_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15000),
     HEALTH_BIND: z.string().default("127.0.0.1"),
@@ -99,6 +131,14 @@ export interface AppConfig {
     appId: string;
     appSecret: string;
     botName: string;
+    configured: boolean;
+  };
+  diagnosticBridge: {
+    baseUrl: string;
+    token: string;
+    caller: string;
+    timeoutMs: number;
+    defaultScope: Scope;
     configured: boolean;
   };
   smartkit: {
@@ -143,8 +183,16 @@ export interface AppConfig {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const loadedProfile = loadEnvProfile(env);
-  const raw = buildSchema(loadedProfile).parse(env);
+  const raw = buildSchema(loadedProfile).parse(normalizeDiagnosticEnvAliases(env));
   const configHome = resolveConfigHome(env);
+  const diagnosticBridge = {
+    baseUrl: normalizeOptionalText(raw.DIAGNOSTIC_HTTP_BASE_URL).replace(/\/$/, ""),
+    token: raw.DIAGNOSTIC_HTTP_TOKEN,
+    caller: raw.DIAGNOSTIC_HTTP_CALLER,
+    timeoutMs: raw.DIAGNOSTIC_HTTP_TIMEOUT_MS,
+    defaultScope: raw.DIAGNOSTIC_HTTP_DEFAULT_SCOPE,
+    configured: isConfigured(raw.DIAGNOSTIC_HTTP_BASE_URL)
+  };
   return {
     nodeEnv: raw.NODE_ENV,
     profile: raw.BOT_PROFILE,
@@ -154,14 +202,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       botName: raw.FEISHU_BOT_NAME,
       configured: isConfigured(raw.FEISHU_APP_ID, raw.FEISHU_APP_SECRET)
     },
-    smartkit: {
-      baseUrl: normalizeOptionalText(raw.SMARTKIT_BASE_URL).replace(/\/$/, ""),
-      token: raw.SMARTKIT_TOKEN,
-      caller: raw.SMARTKIT_CALLER,
-      timeoutMs: raw.SMARTKIT_TIMEOUT_MS,
-      defaultScope: raw.SMARTKIT_DEFAULT_SCOPE,
-      configured: isConfigured(raw.SMARTKIT_BASE_URL)
-    },
+    diagnosticBridge,
+    smartkit: diagnosticBridge,
     session: {
       dbPath:
         raw.SESSION_DB_PATH === ":memory:"

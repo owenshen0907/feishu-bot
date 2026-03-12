@@ -1,7 +1,7 @@
 import type { ParsedCommand, TimeRange } from "../types.js";
 
 const TIME_RANGE_PATTERN = /\b(15m|1h|6h|1d)\b/i;
-const COMMAND_PATTERN = /^\/(help|trace|trace-async|uid|uid-async|job|chat-reset|chat|memory)\b/i;
+const COMMAND_PATTERN = /^\/(help|trace|trace-async|uid|uid-async|job|chat-reset|chat|memory|new)\b/i;
 const TRACE_NAMED_PATTERN = /trace(?:[_-]?id)?\s*[:：=]?\s*([A-Za-z0-9_-]{6,})/i;
 const TRACE_GENERIC_PATTERN = /\b([A-Za-z0-9_-]{8,})\b/;
 const UID_PATTERN = /\b(\d{6,})\b/;
@@ -58,7 +58,7 @@ function parseExplicitCommand(raw: string, currentJobId?: string | null): Parsed
   if (command === "memory") {
     return buildCommand("memory_status", raw);
   }
-  if (command === "chat-reset") {
+  if (command === "chat-reset" || command === "new") {
     return buildCommand("memory_clear", raw);
   }
   if (command === "chat") {

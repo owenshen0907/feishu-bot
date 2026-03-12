@@ -4,6 +4,10 @@ export type TargetType = "trace" | "uid";
 export type TimeRange = "15m" | "1h" | "6h" | "1d";
 export type CommandAction = "help" | "trace" | "uid" | "job" | "followup" | "chat" | "memory_clear" | "memory_status";
 export type ChatRole = "system" | "user" | "assistant";
+export type DynamicDiagnosticCapabilityID = `component:${string}`;
+export type CapabilityID = "chat" | "smartkit" | "diagnosticHttp" | "webSearch" | "voiceReply" | "vision" | DynamicDiagnosticCapabilityID;
+export type CapabilityAccessSource = "user" | "group" | "default";
+export type HelpCapabilityOrderMode = "builtin_first" | "component_first";
 
 export interface BridgeEnvelope<T = unknown> {
   code: string;
@@ -90,6 +94,33 @@ export interface ParsedCommand {
   useCurrentJob: boolean;
 }
 
+export interface DiagnosticComponentProfile {
+  id: string;
+  name: string;
+  enabled: boolean;
+  command: string;
+  summary: string;
+  usageDescription: string;
+  examplePrompts: string[];
+  baseUrl: string;
+  token: string;
+  caller: string;
+  timeoutMs: number;
+}
+
+export interface DiagnosticIntentPrompt {
+  component: DiagnosticComponentProfile;
+  reason: string;
+  expectedInputs: string[];
+}
+
+export interface DiagnosticIntentResolution {
+  kind: "command" | "missing_target";
+  componentId: string;
+  command?: ParsedCommand;
+  prompt?: DiagnosticIntentPrompt;
+}
+
 export interface FeishuMention {
   key?: string;
   name?: string;
@@ -136,13 +167,21 @@ export interface SentMessage {
   threadId?: string;
 }
 
+export interface ThreadIdentity {
+  requesterName?: string | null;
+  chatName?: string | null;
+}
+
 export interface SessionRecord {
   sessionId: string;
   conversationId: string;
+  componentId?: string | null;
   jobId?: string | null;
   requesterId: string;
+  requesterName?: string | null;
   scope: Scope;
   chatId: string;
+  chatName?: string | null;
   chatType: string;
   anchorMessageId: string;
   lastMessageId: string;
@@ -155,6 +194,16 @@ export interface SessionRecord {
 
 export interface ChatMemoryRecord {
   role: ChatRole;
+  content: string;
+  createdAt: string;
+}
+
+export interface SessionMessageRecord {
+  sessionId: string;
+  role: ChatRole;
+  senderId?: string | null;
+  senderName?: string | null;
+  messageId?: string | null;
   content: string;
   createdAt: string;
 }
@@ -189,14 +238,102 @@ export interface BotReplyMessage {
   textPreview: string;
 }
 
-export interface BotMessenger {
-  replyCard(messageId: string, reply: BotReplyMessage, options?: ReplyOptions): Promise<SentMessage>;
+export interface BotTextReplyMessage {
+  kind: "text";
+  text: string;
+  textPreview: string;
 }
 
-export interface SmartKitGateway {
+export type BotOutboundMessage = BotReplyMessage | BotTextReplyMessage;
+
+export interface BotMessenger {
+  replyMessage(messageId: string, reply: BotOutboundMessage, options?: ReplyOptions): Promise<SentMessage>;
+  addProcessingReaction(messageId: string): Promise<string | null>;
+  removeProcessingReaction(messageId: string, reactionId: string | null): Promise<void>;
+}
+
+export interface CapabilityContext {
+  scope: Scope;
+  chatId: string;
+  userId: string;
+}
+
+export interface CapabilityAccessResult {
+  allowed: boolean;
+  source: CapabilityAccessSource;
+  reason: string;
+}
+
+export interface CapabilityGate {
+  canUse(capabilityID: CapabilityID, context: CapabilityContext): CapabilityAccessResult;
+}
+
+export interface IdentityResolver {
+  resolveThreadIdentity(input: {
+    requesterId: string;
+    chatId: string;
+    chatType: string;
+    scope: Scope;
+  }): Promise<ThreadIdentity>;
+}
+
+export interface DiagnosticIntentResolver {
+  getComponents(): DiagnosticComponentProfile[];
+  pickComponent(input: {
+    message: string;
+    preferredComponentId?: string | null;
+    availableComponentIds?: string[];
+  }): string | null;
+  resolve(input: {
+    message: string;
+    parsed: ParsedCommand;
+    currentJobId?: string | null;
+    hasThreadContext: boolean;
+    preferredComponentId?: string | null;
+    availableComponentIds?: string[];
+  }): DiagnosticIntentResolution | null;
+}
+
+export interface HelpContentProfile {
+  title: string;
+  summary: string;
+  newCommandDescription: string;
+  capabilityOrderMode: HelpCapabilityOrderMode;
+  examplePrompts: string[];
+  notes: string[];
+}
+
+export interface HelpCapabilitySummaryItem {
+  title: string;
+  description: string;
+  command?: string;
+}
+
+export interface HelpContentProvider {
+  getHelpContent(): HelpContentProfile | null;
+}
+
+export interface ProcessingReactionProfile {
+  enabled: boolean;
+  emoji: string;
+}
+
+export interface ProcessingReactionProvider {
+  getProcessingReaction(): ProcessingReactionProfile;
+}
+
+export interface DiagnosticGateway {
   analyzeTrace(input: { traceId: string; mode: Mode; requesterId: string; scope: Scope }): Promise<BridgeEnvelope<DiagnosisPayload | AcceptedPayload>>;
   analyzeUid(input: { uid: string; mode: Mode; timeRange: TimeRange; requesterId: string; scope: Scope }): Promise<BridgeEnvelope<DiagnosisPayload | AcceptedPayload>>;
   getJob(jobId: string): Promise<BridgeEnvelope<JobPayload>>;
   followup(input: { conversationId: string; message: string; requesterId: string; scope: Scope }): Promise<BridgeEnvelope<DiagnosisPayload | AcceptedPayload>>;
   getConversation(conversationId: string): Promise<BridgeEnvelope<ConversationPayload>>;
 }
+
+export interface DiagnosticGatewayProvider {
+  listComponents(): DiagnosticComponentProfile[];
+  getComponent(componentId: string): DiagnosticComponentProfile | null;
+  getGateway(componentId: string): DiagnosticGateway | undefined;
+}
+
+export type SmartKitGateway = DiagnosticGateway;

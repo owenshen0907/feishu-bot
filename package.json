@@ -1,29 +1,28 @@
 {
   "name": "feishu-bot",
   "version": "2.0.0",
-  "description": "Lightweight Feishu long-connection bot for SmartKit bridge.",
+  "description": "Local-first Feishu bot with pluggable diagnostic HTTP components.",
   "type": "module",
-  "main": "electron/main.mjs",
+  "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "rm -rf dist && tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "build": "python3 -c \"import os, shutil, stat; exec(\\\"def onerror(func, path, exc_info):\\\\n    try:\\\\n        os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)\\\\n    except OSError:\\\\n        pass\\\\n    try:\\\\n        func(path)\\\\n    except Exception:\\\\n        pass\\\"); shutil.rmtree('dist', ignore_errors=False, onerror=onerror) if os.path.exists('dist') else None\" && tsc -p tsconfig.json",
+    "start": "pnpm rebuild:native:node && node dist/index.js",
     "rebuild:native:node": "node scripts/rebuild-better-sqlite3.mjs node",
     "dev:mac": "pnpm rebuild:native:node && pnpm build && swift run --package-path macos/FeishuBotApp",
-    "build:mac": "pnpm build && swift build --package-path macos/FeishuBotApp -c release",
+    "generate:mac:icon": "swift scripts/generate-native-mac-icon.swift",
+    "build:mac": "pnpm rebuild:native:node && pnpm build && swift build --package-path macos/FeishuBotApp -c release",
     "test:mac": "swift test --package-path macos/FeishuBotApp",
     "start:mac": "pnpm rebuild:native:node && pnpm build && swift run --package-path macos/FeishuBotApp -c release",
-    "package:mac": "pnpm build && swift build --package-path macos/FeishuBotApp -c release && node scripts/package-native-mac-app.mjs",
-    "rebuild:native:electron": "node scripts/rebuild-better-sqlite3.mjs electron",
-    "dev:mac:electron": "pnpm rebuild:native:electron && cross-env ELECTRON_DEV=true concurrently \"pnpm dev\" \"wait-on http://127.0.0.1:3179/health && electron electron/main.mjs\"",
-    "start:mac:electron": "pnpm rebuild:native:electron && cross-env ELECTRON_DEV=false electron electron/main.mjs",
-    "package:mac:electron": "pnpm rebuild:native:electron && pnpm build && electron-builder --mac dmg",
+    "package:mac": "pnpm rebuild:native:node && pnpm build && swift build --package-path macos/FeishuBotApp -c release && node scripts/package-native-mac-app.mjs",
     "test": "vitest run"
   },
   "keywords": [
     "feishu",
-    "smartkit",
     "bot",
+    "diagnostic",
+    "http-bridge",
+    "macos",
     "long-connection",
     "bridge"
   ],
@@ -33,16 +32,11 @@
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.3.1",
     "openai": "^6.27.0",
-    "wait-on": "^9.0.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.3.5",
-    "concurrently": "^9.2.1",
-    "cross-env": "^10.1.0",
-    "electron": "^40.8.0",
-    "electron-builder": "^26.8.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
@@ -53,29 +47,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3",
-      "electron",
       "esbuild",
       "protobufjs"
     ]
-  },
-  "build": {
-    "appId": "com.smartkit.feishubot",
-    "productName": "Feishu Bot",
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "node_modules/**/*",
-      "package.json",
-      ".env*",
-      "data/**/*"
-    ],
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "category": "public.app-category.developer-tools"
-    }
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }

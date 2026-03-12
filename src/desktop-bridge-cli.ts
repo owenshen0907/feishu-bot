@@ -1,23 +1,52 @@
 import process from "node:process";
-// @ts-ignore bridge core is authored in Electron-side ESM and loaded at runtime.
-import {
+// @ts-ignore bridge core is authored as a colocated ESM helper and loaded at runtime.
+import * as bridgeCore from "../desktop/bridge-core.mjs";
+
+const {
   buildBootstrapPayload,
+  importDiagnosticComponentConfig,
   openConfigPath,
   openDataPath,
   readHealthStatus,
   restartDetachedBackend,
   saveDesktopConfig,
   sendFeishuTestMessage,
+  listRecentThreads,
+  listThreadMessages,
+  polishConsoleCopy,
+  testFeishuConnectivity,
+  testModelConnectivity,
+  testDiagnosticComponentConnectivity,
   stopDetachedBackend
-} from "../electron/bridge-core.mjs";
+} = bridgeCore as Record<string, (...args: any[]) => any>;
 
 interface BridgeRequest {
-  command: "bootstrap" | "save-config" | "restart-backend" | "stop-backend" | "health" | "open-config" | "open-data" | "send-test-message";
+  command:
+    | "bootstrap"
+    | "save-config"
+    | "restart-backend"
+    | "stop-backend"
+    | "health"
+    | "open-config"
+    | "open-data"
+    | "send-test-message"
+    | "list-recent-threads"
+    | "list-thread-messages"
+    | "test-feishu-connectivity"
+    | "test-model-connectivity"
+    | "polish-copy"
+    | "import-diagnostic-component-config"
+    | "test-diagnostic-component-connectivity";
   payload?: {
     env?: Record<string, string>;
     settings?: Record<string, unknown>;
     receiveId?: string;
     receiveIdType?: string;
+    sessionId?: string;
+    limit?: number;
+    text?: string;
+    purpose?: string;
+    component?: Record<string, unknown>;
   };
 }
 
@@ -63,6 +92,20 @@ async function runCommand(request: BridgeRequest) {
       return openDataPath();
     case "send-test-message":
       return sendFeishuTestMessage(request.payload);
+    case "list-recent-threads":
+      return listRecentThreads();
+    case "list-thread-messages":
+      return listThreadMessages(request.payload);
+    case "test-feishu-connectivity":
+      return testFeishuConnectivity();
+    case "test-model-connectivity":
+      return testModelConnectivity();
+    case "polish-copy":
+      return polishConsoleCopy(request.payload);
+    case "import-diagnostic-component-config":
+      return importDiagnosticComponentConfig(request.payload);
+    case "test-diagnostic-component-connectivity":
+      return testDiagnosticComponentConnectivity(request.payload);
     default:
       return assertNever(request.command);
   }

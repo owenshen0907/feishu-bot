@@ -22,6 +22,11 @@ describe("parseMessage", () => {
     expect(parsed.rawText).toBe("帮我总结一下今天的工作");
   });
 
+  it("treats /new as the memory clear shortcut", () => {
+    const parsed = parseMessage("/new", { hasThreadContext: false });
+    expect(parsed.action).toBe("memory_clear");
+  });
+
   it("falls back to chat in private chat when no command matches", () => {
     const parsed = parseMessage("你觉得这个方案怎么样", { hasThreadContext: false, allowChatFallback: true });
     expect(parsed.action).toBe("chat");
