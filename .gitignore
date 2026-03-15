@@ -14,4 +14,6 @@ data/*.sqlite-wal
 coverage
 .vscode
 .codex
+.artifacts
+.build-artifacts
 .DS_Store
