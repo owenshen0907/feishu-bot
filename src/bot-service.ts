@@ -39,6 +39,9 @@ interface MessageContext {
   replyInThread: boolean;
 }
 
+const PRIVATE_DIAGNOSTIC_FOLLOWUP_PATTERN =
+  /(原因|根因|证据|建议|日志|链路|调用链|trace|uid|job|任务|状态|进度|结果|结论|报错|错误|异常|超时|失败|怎么处理|如何处理|怎么办|为啥|为什么|咋回事|影响范围|next step|status|reason|evidence|suggestion|error|timeout|result)/i;
+
 export class BotService {
   private readonly diagnosticGatewayProvider?: DiagnosticGatewayProvider;
 
@@ -296,6 +299,9 @@ export class BotService {
         };
       }
       case "followup": {
+        if (context.scope === "p2p" && !this.shouldUsePrivateDiagnosticFollowup(parsed.rawText, session)) {
+          return this.executeChatReply(parsed.rawText, context);
+        }
         const selected = this.resolveDiagnosticGateway(context.text, session?.componentId, context);
         if (selected.kind === "error") {
           return { reply: selected.reply };
@@ -317,24 +323,7 @@ export class BotService {
         return this.handleBridgeResponse(envelope, parsed.rawText, requesterId, session.scope, selected.component.id);
       }
       case "chat": {
-        const denied = this.requireCapability("chat", context);
-        if (denied) {
-          return { reply: denied };
-        }
-        if (!this.chatService.isAvailable()) {
-          return { reply: this.formatter.formatChatUnavailable() };
-        }
-        const result = await this.chatService.reply({
-          userId: context.userId,
-          message: parsed.rawText
-        });
-        return {
-          reply: this.formatter.formatChatReply({
-            question: parsed.rawText,
-            answer: result.answer,
-            memoryCount: result.memoryCount
-          })
-        };
+        return this.executeChatReply(parsed.rawText, context);
       }
       case "memory_clear": {
         const denied = this.requireCapability("chat", context);
@@ -387,6 +376,39 @@ export class BotService {
         component: prompt.component,
         reason: prompt.reason,
         expectedInputs: prompt.expectedInputs
+      })
+    };
+  }
+
+  private async executeChatReply(
+    message: string,
+    context: MessageContext
+  ): Promise<{
+    reply: BotOutboundMessage;
+    componentId?: string | null;
+    conversationId?: string;
+    jobId?: string | null;
+    jobStatus?: string | null;
+    notificationSentAt?: string | null;
+    requesterId?: string;
+    scope?: Scope;
+  }> {
+    const denied = this.requireCapability("chat", context);
+    if (denied) {
+      return { reply: denied };
+    }
+    if (!this.chatService.isAvailable()) {
+      return { reply: this.formatter.formatChatUnavailable() };
+    }
+    const result = await this.chatService.reply({
+      userId: context.userId,
+      message
+    });
+    return {
+      reply: this.formatter.formatChatReply({
+        question: message,
+        answer: result.answer,
+        memoryCount: result.memoryCount
       })
     };
   }
@@ -678,6 +700,13 @@ export class BotService {
     }
     const stableKey = context.aliasKeys[0] || `${context.scope}:${context.chatId}:${context.userId}:${context.messageId}`;
     return `local:${stableKey}`;
+  }
+
+  private shouldUsePrivateDiagnosticFollowup(message: string, session: SessionRecord | undefined): boolean {
+    if (!session?.componentId || !session.conversationId || session.conversationId.startsWith("local:")) {
+      return false;
+    }
+    return PRIVATE_DIAGNOSTIC_FOLLOWUP_PATTERN.test(message);
   }
 
   private async replySafely(messageId: string, reply: BotOutboundMessage, replyInThread: boolean, processingReactionId: string | null) {

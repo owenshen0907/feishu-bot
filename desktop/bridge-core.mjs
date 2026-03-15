@@ -413,6 +413,57 @@ function createModelClient(env) {
   });
 }
 
+const TEXT_CONTENT_PART_TYPES = new Set(["text", "output_text"]);
+
+function readContentPartText(part) {
+  if (!part || typeof part !== "object") {
+    return "";
+  }
+  const type = trim(part.type).toLowerCase();
+  if (type && !TEXT_CONTENT_PART_TYPES.has(type)) {
+    return "";
+  }
+  if (typeof part.text === "string") {
+    return trim(part.text);
+  }
+  if (part.text && typeof part.text === "object") {
+    return trim(part.text.value);
+  }
+  return "";
+}
+
+function listContentPartTypes(content) {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .map((item) => trim(item?.type).toLowerCase())
+    .filter(Boolean);
+}
+
+function hasReasoningSignal(response) {
+  const message = response?.choices?.[0]?.message;
+  if (trim(message?.reasoning) || trim(message?.reasoning_content)) {
+    return true;
+  }
+  return listContentPartTypes(message?.content).some((type) => type.includes("reasoning") || type.includes("thinking"));
+}
+
+function isStepReasoningModel(env, model) {
+  const provider = trim(env?.BOT_LLM_PROVIDER).toLowerCase();
+  const baseURL = trim(env?.BOT_LLM_BASE_URL).toLowerCase();
+  const normalizedModel = trim(model).toLowerCase();
+  if (!normalizedModel) {
+    return false;
+  }
+  const isStepProvider = provider === "stepfun" || baseURL.includes("api.stepfun.com");
+  return isStepProvider && /^step-3([.-]|$)/.test(normalizedModel);
+}
+
+export function buildProbeMaxTokens(env, model) {
+  return isStepReasoningModel(env, model) ? 512 : 16;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -800,19 +851,25 @@ export async function testModelConnectivity() {
   const client = createModelClient(env);
   const response = await client.chat.completions.create({
     model,
+    temperature: 0,
     messages: [
       {
         role: "user",
-        content: "ping"
+        content: "请直接回复 pong，不要解释，也不要展示思考过程。"
       }
     ],
-    max_tokens: 8
+    max_tokens: buildProbeMaxTokens(env, model)
   }, {
     timeout: Number(env.BOT_LLM_TIMEOUT_MS || 15000)
   });
 
   if (!response?.id || !Array.isArray(response?.choices) || response.choices.length === 0) {
     throw new Error("模型接口已响应，但未返回可识别结果。");
+  }
+
+  const output = extractModelText(response);
+  if (!output) {
+    throw new Error(describeEmptyModelText(response));
   }
 
   return {
@@ -822,18 +879,56 @@ export async function testModelConnectivity() {
   };
 }
 
-function extractModelText(response) {
+export function extractModelText(response) {
+  if (typeof response?.output_text === "string" && trim(response.output_text)) {
+    return trim(response.output_text);
+  }
   if (typeof response?.choices?.[0]?.message?.content === "string") {
     return trim(response.choices[0].message.content);
   }
   if (Array.isArray(response?.choices?.[0]?.message?.content)) {
     return response.choices[0].message.content
-      .map((item) => trim(item?.text))
+      .map((item) => readContentPartText(item))
       .filter(Boolean)
       .join("\n")
       .trim();
   }
   return "";
+}
+
+export function describeEmptyModelText(response) {
+  const choice = response?.choices?.[0];
+  const message = choice?.message;
+  const finishReason = trim(choice?.finish_reason).toLowerCase();
+  const refusal = trim(message?.refusal);
+  const contentTypes = listContentPartTypes(message?.content);
+  const reasoning = hasReasoningSignal(response);
+
+  if (refusal) {
+    return "模型拒绝了这次请求，所以没有返回正文。";
+  }
+  if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
+    return "模型返回了工具调用而不是正文。";
+  }
+  if (finishReason === "content_filter") {
+    return "模型输出被内容过滤拦截了。";
+  }
+  if (finishReason === "length" || reasoning) {
+    return "模型已响应，但只返回了推理内容或在正文前耗尽了输出 token。可增大输出 token 上限后重试。";
+  }
+  if (contentTypes.length > 0) {
+    return `模型已响应，但只返回了非正文片段（${contentTypes.slice(0, 3).join(" / ")}）。`;
+  }
+  return "模型已响应，但没有返回可用的润色结果。";
+}
+
+export function buildPolishMaxTokens(env, text, model = env?.BOT_LLM_MODEL) {
+  const normalizedText = trim(text);
+  const defaultBudget = Math.max(180, Math.min(800, normalizedText.length * 2));
+  if (!isStepReasoningModel(env, model)) {
+    return defaultBudget;
+  }
+  return Math.max(512, Math.min(2048, normalizedText.length * 8));
 }
 
 export async function polishConsoleCopy(payload = {}) {
@@ -861,6 +956,7 @@ export async function polishConsoleCopy(payload = {}) {
           "请把用户提供的配置文案润色成更清晰、自然、可直接上线使用的版本。",
           "不要编造新事实，不要新增未提供的能力、命令、链接、ID 或承诺。",
           "保留原文里的 Slash 命令、专有名词、数字、换行结构和 Markdown 语义。",
+          "不要输出思考过程、分析过程、修改说明、前后缀或代码块。",
           "只输出润色后的正文，不要解释。"
         ].join(" ")
       },
@@ -869,14 +965,14 @@ export async function polishConsoleCopy(payload = {}) {
         content: `用途：${purpose}\n原文：\n${text}`
       }
     ],
-    max_tokens: Math.max(180, Math.min(800, text.length * 2))
+    max_tokens: buildPolishMaxTokens(env, text, model)
   }, {
     timeout: Number(env.BOT_LLM_TIMEOUT_MS || 15000)
   });
 
   const polished = extractModelText(response);
   if (!polished) {
-    throw new Error("模型已响应，但没有返回可用的润色结果。");
+    throw new Error(describeEmptyModelText(response));
   }
 
   return {

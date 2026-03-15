@@ -561,6 +561,22 @@ describe("BotService", () => {
     store.close();
   });
 
+  it("falls back to chat for plain private messages even when a diagnostic session exists", async () => {
+    const store = new SessionStore(":memory:");
+    const messenger = new InMemoryMessenger();
+    const smartkit = new FakeSmartKit();
+    const chatService = new FakeChatService();
+    const service = new BotService(store, smartkit, chatService, messenger, formatter, "smartkit-bot");
+
+    await service.handleEvent(buildEvent("/trace trace-123"));
+    await service.handleEvent(buildEvent("你太棒了"));
+
+    expect(smartkit.followupCalls).toHaveLength(0);
+    expect(chatService.messages).toContain("user-1:你太棒了");
+    expect(renderReplyText(messenger, 1)).toContain("我记住了：你太棒了");
+    store.close();
+  });
+
   it("polls async jobs and pushes completion card", async () => {
     const store = new SessionStore(":memory:");
     const messenger = new InMemoryMessenger();
@@ -638,6 +654,50 @@ describe("BotService", () => {
 
       expect(smartkit.uidCalls).toBe(1);
       expect(renderReplyText(messenger, 0)).toContain("UID 后台诊断已提交");
+      store.close();
+    } finally {
+      process.env.FEISHU_BOT_HOME = previousHome;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("still inspects private followups for diagnostic intent before defaulting to chat", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "feishu-bot-followup-intent-"));
+    fs.writeFileSync(
+      path.join(tempHome, "console-settings.json"),
+      JSON.stringify({
+        version: 2,
+        permissions: { defaultMode: "allow", groups: [], users: [] },
+        components: {
+          diagnosticHttp: {
+            name: "订单诊断",
+            command: "orders",
+            summary: "用于订单失败与支付超时排查",
+            usageDescription: "当用户提到订单失败、支付超时时，优先尝试 uid 或 trace 排查。",
+            examplePrompts: ["订单诊断帮我看 123456 最近 1h 的失败原因"]
+          }
+        },
+        ui: {}
+      }),
+      "utf8"
+    );
+
+    const previousHome = process.env.FEISHU_BOT_HOME;
+    process.env.FEISHU_BOT_HOME = tempHome;
+    try {
+      const store = new SessionStore(":memory:");
+      const messenger = new InMemoryMessenger();
+      const smartkit = new FakeSmartKit();
+      const chatService = new FakeChatService();
+      const router = new ConsoleDiagnosticIntentRouter(process.env);
+      const service = new BotService(store, smartkit, chatService, messenger, formatter, "smartkit-bot", undefined, undefined, router);
+
+      await service.handleEvent(buildEvent("先随便聊两句"));
+      await service.handleEvent(buildEvent("订单诊断帮我看 123456 最近1h 的失败原因"));
+
+      expect(chatService.messages).toContain("user-1:先随便聊两句");
+      expect(smartkit.uidCalls).toBe(1);
+      expect(renderReplyText(messenger, 1)).toContain("UID 后台诊断已提交");
       store.close();
     } finally {
       process.env.FEISHU_BOT_HOME = previousHome;

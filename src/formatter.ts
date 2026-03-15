@@ -15,6 +15,38 @@ import type {
   LinkItem
 } from "./types.js";
 
+const TEXT_CONTENT_PART_TYPES = new Set(["text", "output_text"]);
+
+function extractAssistantText(content: unknown): string {
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+      const type = "type" in part ? String(part.type ?? "").trim().toLowerCase() : "";
+      if (type && !TEXT_CONTENT_PART_TYPES.has(type)) {
+        return "";
+      }
+      const text = "text" in part ? part.text : "";
+      if (typeof text === "string") {
+        return text.trim();
+      }
+      if (text && typeof text === "object" && "value" in text) {
+        return String(text.value ?? "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 export class BotFormatter {
   private client?: OpenAI;
 
@@ -392,18 +424,9 @@ export class BotFormatter {
     }, {
       timeout: this.config.timeoutMs
     });
-    const content = response.choices[0]?.message?.content;
-    if (typeof content === "string" && content.trim()) {
+    const content = extractAssistantText(response.choices[0]?.message?.content);
+    if (content) {
       return normalizeMultiline(content, 220);
-    }
-    if (Array.isArray(content)) {
-      const merged = content
-        .map((part) => (typeof part === "object" && part && "text" in part ? String(part.text) : ""))
-        .join("\n")
-        .trim();
-      if (merged) {
-        return normalizeMultiline(merged, 220);
-      }
     }
     throw new Error("empty llm response");
   }

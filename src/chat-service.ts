@@ -7,6 +7,39 @@ interface ChatCompletionGateway {
   complete(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): Promise<string>;
 }
 
+const TEXT_CONTENT_PART_TYPES = new Set(["text", "output_text"]);
+
+function extractAssistantText(content: unknown): string {
+  if (typeof content === "string" && content.trim()) {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const merged = content
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+      const type = "type" in part ? String(part.type ?? "").trim().toLowerCase() : "";
+      if (type && !TEXT_CONTENT_PART_TYPES.has(type)) {
+        return "";
+      }
+      const text = "text" in part ? part.text : "";
+      if (typeof text === "string") {
+        return text.trim();
+      }
+      if (text && typeof text === "object" && "value" in text) {
+        return String(text.value ?? "").trim();
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return merged;
+}
+
 class OpenAIChatGateway implements ChatCompletionGateway {
   private client?: OpenAI;
 
@@ -20,18 +53,9 @@ class OpenAIChatGateway implements ChatCompletionGateway {
     }, {
       timeout: this.llmConfig.timeoutMs
     });
-    const content = response.choices[0]?.message?.content;
-    if (typeof content === "string" && content.trim()) {
-      return content.trim();
-    }
-    if (Array.isArray(content)) {
-      const merged = content
-        .map((part) => (typeof part === "object" && part && "text" in part ? String(part.text) : ""))
-        .join("\n")
-        .trim();
-      if (merged) {
-        return merged;
-      }
+    const merged = extractAssistantText(response.choices[0]?.message?.content);
+    if (merged) {
+      return merged;
     }
     throw new Error("empty chat response");
   }

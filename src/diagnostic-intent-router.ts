@@ -203,7 +203,7 @@ function shouldInspectReroute(parsed: ParsedCommand, message: string): boolean {
   if (SKIP_EXPLICIT_PATTERN.test(message.trim())) {
     return false;
   }
-  return parsed.action === "chat" || parsed.action === "help";
+  return parsed.action === "chat" || parsed.action === "help" || parsed.action === "followup";
 }
 
 function analyzeDiagnosticIntent(message: string, component: DiagnosticComponentProfile, currentJobId?: string | null):

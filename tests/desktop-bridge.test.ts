@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildPolishMaxTokens,
+  buildProbeMaxTokens,
   buildBootstrapPayload,
+  describeEmptyModelText,
+  extractModelText,
   importDiagnosticComponentConfig,
   listRecentThreads,
   listThreadMessages,
@@ -32,6 +36,111 @@ afterEach(() => {
 });
 
 describe("desktop bridge core", () => {
+  it("extracts model text from OpenAI-compatible response variants", () => {
+    expect(extractModelText({
+      choices: [
+        {
+          message: {
+            content: "  已润色正文  "
+          }
+        }
+      ]
+    })).toBe("已润色正文");
+
+    expect(extractModelText({
+      choices: [
+        {
+          message: {
+            content: [
+              { type: "text", text: "第一段" },
+              { type: "text", text: { value: "第二段" } }
+            ]
+          }
+        }
+      ]
+    })).toBe("第一段\n第二段");
+
+    expect(extractModelText({
+      output_text: "  responses api 结果  "
+    })).toBe("responses api 结果");
+
+    expect(extractModelText({
+      choices: [
+        {
+          message: {
+            content: [
+              { type: "reasoning", text: "先想一想" },
+              { type: "text", text: "最终正文" }
+            ]
+          }
+        }
+      ]
+    })).toBe("最终正文");
+
+    expect(extractModelText({
+      choices: [
+        {
+          message: {
+            content: [
+              { type: "reasoning", text: "先想一想" }
+            ]
+          }
+        }
+      ]
+    })).toBe("");
+  });
+
+  it("explains empty reasoning-model responses clearly", () => {
+    expect(describeEmptyModelText({
+      choices: [
+        {
+          finish_reason: "length",
+          message: {
+            reasoning_content: "先思考一下"
+          }
+        }
+      ]
+    })).toContain("输出 token");
+
+    expect(describeEmptyModelText({
+      choices: [
+        {
+          message: {
+            refusal: "不能回答"
+          }
+        }
+      ]
+    })).toContain("拒绝");
+
+    expect(describeEmptyModelText({
+      choices: [
+        {
+          message: {
+            content: [
+              { type: "tool_result", text: "内部结构" }
+            ]
+          }
+        }
+      ]
+    })).toContain("非正文片段");
+  });
+
+  it("allocates a larger output budget for Step reasoning models", () => {
+    const stepEnv = {
+      BOT_LLM_PROVIDER: "stepfun",
+      BOT_LLM_BASE_URL: "https://api.stepfun.com/v1",
+      BOT_LLM_MODEL: "step-3.5-flash"
+    };
+    const genericEnv = {
+      BOT_LLM_PROVIDER: "custom-openai",
+      BOT_LLM_BASE_URL: "https://api.openai.com/v1",
+      BOT_LLM_MODEL: "gpt-4.1-mini"
+    };
+
+    expect(buildProbeMaxTokens(stepEnv, stepEnv.BOT_LLM_MODEL)).toBeGreaterThan(buildProbeMaxTokens(genericEnv, genericEnv.BOT_LLM_MODEL));
+    expect(buildPolishMaxTokens(stepEnv, "简短文案", stepEnv.BOT_LLM_MODEL)).toBeGreaterThan(buildPolishMaxTokens(genericEnv, "简短文案", genericEnv.BOT_LLM_MODEL));
+  });
+
   it("builds bootstrap payload with runtime defaults", () => {
     const home = makeTempDir();
     process.env.FEISHU_BOT_HOME = home;
