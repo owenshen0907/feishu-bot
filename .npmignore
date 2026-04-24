@@ -1,0 +1,17 @@
+# Keep npm tarballs focused on source/runtime files even after local packaging.
+.native-macos-build/
+.codex/
+data/
+dist/native-macos/
+macos/FeishuBotApp/.build/
+node_modules/
+coverage/
+*.tgz
+.DS_Store
+console-settings.json
+undefined/
+.env
+.env.*
+!.env.example
+!.env.test.example
+!.env.production.example

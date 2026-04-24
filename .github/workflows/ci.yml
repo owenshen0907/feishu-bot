@@ -22,10 +22,14 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        run: pnpm audit --prod
       - name: Build
         run: pnpm build
       - name: Test
         run: pnpm test
+      - name: Check npm package contents
+        run: pnpm pack:check
 
   macos:
     name: macOS Swift tests

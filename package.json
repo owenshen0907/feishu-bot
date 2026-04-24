@@ -13,12 +13,18 @@
   },
   "homepage": "https://github.com/owenshen0907/feishu-bot#readme",
   "files": [
-    "dist",
-    "desktop",
-    "assets",
-    "macos",
-    "scripts",
-    "docs",
+    "dist/*.js",
+    "dist/adapter/**/*.js",
+    "dist/parser/**/*.js",
+    "desktop/**/*.mjs",
+    "desktop/**/*.d.mts",
+    "assets/macos/*",
+    "macos/FeishuBotApp/Package.swift",
+    "macos/FeishuBotApp/Sources/**/*.swift",
+    "macos/FeishuBotApp/Tests/**/*.swift",
+    "scripts/*.mjs",
+    "scripts/*.swift",
+    "docs/**/*.md",
     ".env.example",
     ".env.test.example",
     ".env.production.example",
@@ -30,7 +36,7 @@
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "python3 -c \"import os, shutil, stat; exec(\\\"def onerror(func, path, exc_info):\\\\n    try:\\\\n        os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)\\\\n    except OSError:\\\\n        pass\\\\n    try:\\\\n        func(path)\\\\n    except Exception:\\\\n        pass\\\"); shutil.rmtree('dist', ignore_errors=False, onerror=onerror) if os.path.exists('dist') else None\" && tsc -p tsconfig.json",
+    "build": "pnpm clean && tsc -p tsconfig.json",
     "start": "pnpm rebuild:native:node && node dist/index.js",
     "rebuild:native:node": "node scripts/rebuild-better-sqlite3.mjs node",
     "dev:mac": "pnpm rebuild:native:node && pnpm build && swift run --package-path macos/FeishuBotApp",
@@ -39,7 +45,9 @@
     "test:mac": "swift test --package-path macos/FeishuBotApp",
     "start:mac": "pnpm rebuild:native:node && pnpm build && swift run --package-path macos/FeishuBotApp -c release",
     "package:mac": "pnpm rebuild:native:node && pnpm build && swift build --package-path macos/FeishuBotApp -c release && node scripts/package-native-mac-app.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "clean": "node scripts/clean-dist.mjs",
+    "pack:check": "node scripts/check-npm-pack.mjs"
   },
   "keywords": [
     "feishu",
@@ -52,7 +60,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@larksuiteoapi/node-sdk": "^1.62.0",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.3.1",
     "openai": "^6.27.0",
@@ -73,7 +81,12 @@
       "better-sqlite3",
       "esbuild",
       "protobufjs"
-    ]
+    ],
+    "overrides": {
+      "axios": "^1.15.2",
+      "follow-redirects": "^1.16.0",
+      "protobufjs": "7.5.5"
+    }
   },
   "packageManager": "pnpm@10.23.0+sha512.21c4e5698002ade97e4efe8b8b4a89a8de3c85a37919f957e7a0f30f38fbc5bbdd05980ffe29179b2fb6e6e691242e098d945d1601772cad0fef5fb6411e2a4b"
 }
