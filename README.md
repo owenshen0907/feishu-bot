@@ -1,5 +1,8 @@
 # Feishu Bot
 
+[![CI](https://github.com/owenshen0907/feishu-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/owenshen0907/feishu-bot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 一个独立的、适合本地电脑部署的飞书长连接 Bot，可按需挂载多个自定义 HTTP 组件。
 
 它只做 6 件事：
@@ -10,6 +13,13 @@
 - 用 Bot 侧 LLM 把结果整理成更适合飞书阅读的卡片摘要
 - 维护会话 / 线程 / 异步任务状态，支持后续追问和任务补发
 - 提供一个不依赖组件的轻量聊天模式，并按用户独立保存记忆
+
+## 开源状态
+
+- License：MIT，详见 [`LICENSE`](LICENSE)
+- 运行配置：`.env`、`.env.*`、`console-settings.json`、SQLite 数据库和 macOS 打包产物默认不进入 Git
+- CI：GitHub Actions 会在 `main` 和 PR 上运行 Node build/test 与 Swift package test
+- 安全：示例里只保留占位符；提交问题或日志前请先脱敏飞书凭据、模型 API Key、Bridge Token、用户 ID、Trace ID 和内网 URL
 
 ## 架构定位
 
@@ -55,6 +65,9 @@
 - `src/session-store.ts`：SQLite 会话、线程、幂等、任务状态、聊天记忆
 - `src/bot-service.ts`：消息编排与会话控制
 - `src/job-poller.ts`：异步任务轮询与结果补发
+- `desktop/`：Node bridge 与桌面控制台运行配置
+- `macos/FeishuBotApp/`：SwiftUI 原生 macOS 控制台
+- `scripts/package-native-mac-app.mjs`：生成 `.app` 与 `.dmg`
 
 ## 环境准备
 
@@ -111,10 +124,18 @@ BOT_PROFILE=test pnpm dev
 BOT_PROFILE=production pnpm start
 ```
 
-仓库里已经带了两个示例文件：
+仓库里已经带了这些示例文件：
 
+- `.env.example`
 - `.env.test.example`
 - `.env.production.example`
+- `console-settings.example.json`
+
+桌面控制台会在首次启动时自动创建本机 `console-settings.json`；如果你需要手动准备默认值，也可以复制：
+
+```bash
+cp console-settings.example.json console-settings.json
+```
 
 ## 启动
 
@@ -174,6 +195,25 @@ pnpm package:mac
 - `Feishu Bot.dmg`
 
 原生 App 会把 Swift 可执行文件、bundled Node runtime、`dist/`、`node_modules/`、bridge 脚本与 `desktop/runtime-config.mjs` 一起打进 bundle。配置仍写入用户本地 `Application Support/Feishu Bot`，不会写回安装目录。
+
+## 发布包检查
+
+开源发布前建议至少跑一遍：
+
+```bash
+pnpm test
+pnpm build
+pnpm test:mac
+pnpm package:mac
+```
+
+`pnpm package:mac` 会生成：
+
+- `dist/native-macos/Feishu Bot.app`
+- `dist/native-macos/Feishu Bot.dmg`
+- 带时间戳的 `.app` / `.dmg` 备份
+
+这些都是本地发布产物，已经被 `.gitignore` 排除；如果要对外发布安装包，建议通过 GitHub Release 上传 DMG，而不是提交进源码仓库。
 
 ## 飞书权限建议
 
@@ -285,4 +325,5 @@ curl http://127.0.0.1:3179/health
 ```bash
 pnpm test
 pnpm build
+pnpm test:mac
 ```

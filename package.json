@@ -4,6 +4,30 @@
   "description": "Local-first Feishu bot with pluggable diagnostic HTTP components.",
   "type": "module",
   "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/owenshen0907/feishu-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/owenshen0907/feishu-bot/issues"
+  },
+  "homepage": "https://github.com/owenshen0907/feishu-bot#readme",
+  "files": [
+    "dist",
+    "desktop",
+    "assets",
+    "macos",
+    "scripts",
+    "docs",
+    ".env.example",
+    ".env.test.example",
+    ".env.production.example",
+    "README.md",
+    "LICENSE",
+    "console-settings.example.json",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "python3 -c \"import os, shutil, stat; exec(\\\"def onerror(func, path, exc_info):\\\\n    try:\\\\n        os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)\\\\n    except OSError:\\\\n        pass\\\\n    try:\\\\n        func(path)\\\\n    except Exception:\\\\n        pass\\\"); shutil.rmtree('dist', ignore_errors=False, onerror=onerror) if os.path.exists('dist') else None\" && tsc -p tsconfig.json",

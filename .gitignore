@@ -17,3 +17,5 @@ coverage
 .artifacts
 .build-artifacts
 .DS_Store
+console-settings.json
+undefined/

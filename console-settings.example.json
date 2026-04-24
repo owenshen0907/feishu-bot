@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "permissions": {
+    "defaultMode": "allow",
+    "groups": [],
+    "users": []
+  },
+  "components": {
+    "diagnosticHttp": []
+  },
+  "capabilityCards": {
+    "webSearch": {
+      "helpDescription": ""
+    },
+    "voiceReply": {
+      "helpDescription": ""
+    },
+    "vision": {
+      "helpDescription": ""
+    }
+  },
+  "feedback": {
+    "processingReaction": {
+      "enabled": true,
+      "emoji": "OnIt"
+    }
+  },
+  "help": null,
+  "ui": {
+    "onboardingCompleted": false,
+    "lastVisitedSection": "thread",
+    "feishuTestReceiveId": "",
+    "feishuTestReceiveIdType": "chat_id"
+  }
+}

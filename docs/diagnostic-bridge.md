@@ -42,10 +42,10 @@ Feishu Bot 只接入一套诊断接口标准，所有第三方平台都需要实
 ```bash
 curl --location 'http://127.0.0.1:5001/api/log-unlock/v1/query' \
   --header 'Content-Type: application/json' \
-  --header 'X-Client-Id: client_d4db65ea6f9f' \
-  --header 'Authorization: Bearer key_9b609d1f44312ced51ff7103f9a2e85dd04babd1' \
+  --header 'X-Client-Id: client_example' \
+  --header 'Authorization: Bearer <diagnostic-token>' \
   --data '{
-  "query": "帮我排查这个请求为什么失败，traceid=2861f673202d43d26950b3ab296109ed，用户反馈 media 超时",
+  "query": "帮我排查这个请求为什么失败，traceid=trace_demo_123456，用户反馈 media 超时",
   "mode": "all",
   "response_mode": "segment",
   "time_range": "1d",
@@ -61,7 +61,7 @@ curl --location 'http://127.0.0.1:5001/api/log-unlock/v1/query' \
   "message": "日志解锁查询成功。",
   "request_id": "b6a5b8be-8f27-4f9b-9cc4-b8c71643f8f1",
   "data": {
-    "trace_id": "2861f673202d43d26950b3ab296109ed",
+    "trace_id": "trace_demo_123456",
     "mode": "all",
     "segments": [
       { "type": "meta", "title": "检索信息", "content": "TraceId..." }
@@ -83,7 +83,7 @@ curl --location 'http://127.0.0.1:5001/api/log-unlock/v1/query' \
     "summary": "查询 trace 与 uid 的日志排障接口",
     "usageDescription": "当用户想排查链路失败、超时、报错原因时调用；不适合回答泛知识问题。",
     "examplePrompts": [
-      "查一下 trace 2861f673202d43d26950b3ab296109ed",
+      "查一下 trace trace_demo_123456",
       "帮我看 uid 123456 最近 1h 的错误"
     ]
   },
@@ -96,7 +96,7 @@ curl --location 'http://127.0.0.1:5001/api/log-unlock/v1/query' \
         "X-Bridge-Caller": "feishu-bot"
       },
       "auth": {
-        "token": "key_9b609d1f44312ced51ff7103f9a2e85dd04babd1"
+        "token": "<diagnostic-token>"
       }
     }
   ],
@@ -107,13 +107,13 @@ curl --location 'http://127.0.0.1:5001/api/log-unlock/v1/query' \
         "summary": "查询 trace 与 uid 的日志排障接口",
         "usageDescription": "适合日志排障、链路诊断、错误定位。",
         "examplePrompts": [
-          "查一下 trace 2861f673202d43d26950b3ab296109ed",
+          "查一下 trace trace_demo_123456",
           "帮我看 uid 123456 最近 1h 的错误"
         ]
       },
       "env": {
         "DIAGNOSTIC_HTTP_BASE_URL": "http://127.0.0.1:5001",
-        "DIAGNOSTIC_HTTP_TOKEN": "key_9b609d1f44312ced51ff7103f9a2e85dd04babd1",
+        "DIAGNOSTIC_HTTP_TOKEN": "<diagnostic-token>",
         "DIAGNOSTIC_HTTP_TIMEOUT_MS": "20000",
         "DIAGNOSTIC_HTTP_CALLER": "feishu-bot"
       }
