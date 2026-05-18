@@ -60,11 +60,11 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.62.0",
-    "better-sqlite3": "^12.9.0",
+    "@larksuiteoapi/node-sdk": "^1.64.0",
+    "better-sqlite3": "^12.10.0",
     "dotenv": "^17.4.2",
-    "openai": "^6.34.0",
-    "zod": "^4.3.6"
+    "openai": "^6.38.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
